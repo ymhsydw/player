@@ -109,6 +109,18 @@ function generateForestDecor() {
 
 const FOREST_DECOR = generateForestDecor();
 
+function getDirectionFromInput(x, y, currentDir = 'front') {
+  if (Math.abs(x) < 0.01 && Math.abs(y) < 0.01) {
+    return currentDir;
+  }
+
+  if (Math.abs(x) > Math.abs(y)) {
+    return x > 0 ? 'right' : 'left';
+  }
+
+  return y > 0 ? 'front' : 'back';
+}
+
 function makePlayer(id) {
   return {
     id,
@@ -116,7 +128,7 @@ function makePlayer(id) {
     y: 500 + Math.random() * (WORLD.height - 1000),
     inputX: 0,
     inputY: 0,
-    angle: 0,
+    dir: 'front',
     avatar: 'knight'
   };
 }
@@ -156,6 +168,7 @@ io.on('connection', (socket) => {
     let y = Number(data.y) || 0;
 
     const length = Math.hypot(x, y);
+
     if (length > 1) {
       x /= length;
       y /= length;
@@ -163,10 +176,7 @@ io.on('connection', (socket) => {
 
     current.inputX = clamp(x, -1, 1);
     current.inputY = clamp(y, -1, 1);
-
-    if (Math.abs(x) > 0.01 || Math.abs(y) > 0.01) {
-      current.angle = Math.atan2(y, x);
-    }
+    current.dir = getDirectionFromInput(x, y, current.dir);
   });
 
   socket.on('setAvatar', (data = {}) => {
@@ -212,7 +222,7 @@ setInterval(() => {
       id: player.id,
       x: player.x,
       y: player.y,
-      angle: player.angle,
+      dir: player.dir,
       avatar: player.avatar
     }))
   );
@@ -224,10 +234,7 @@ app.get('/', (_req, res) => {
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta
-  name="viewport"
-  content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
-/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
 <title>Forest Open Server</title>
 
 <style>
@@ -257,7 +264,7 @@ canvas {
   top: 12px;
   z-index: 20;
   color: white;
-  background: rgba(0, 0, 0, 0.42);
+  background: rgba(0,0,0,.42);
   padding: 10px 13px;
   border-radius: 12px;
   font-size: 14px;
@@ -276,7 +283,7 @@ canvas {
   z-index: 20;
   width: min(320px, calc(100vw - 24px));
   color: white;
-  background: rgba(0, 0, 0, 0.42);
+  background: rgba(0,0,0,.42);
   padding: 12px;
   border-radius: 14px;
   backdrop-filter: blur(6px);
@@ -307,7 +314,7 @@ canvas {
 
 .avatarBtn.selected {
   border-color: #ffe082;
-  background: rgba(255, 224, 130, 0.18);
+  background: rgba(255,224,130,.18);
 }
 
 .avatarName {
@@ -382,6 +389,7 @@ canvas {
   <div>접속자: <span id="count">0</span> / <span id="maxCount">20</span>명</div>
   <div>맵: 숲 오픈서버</div>
   <div>내 캐릭터: <span id="currentAvatar">기사</span></div>
+  <div>방향: 앞 / 뒤 / 좌 / 우 자동 전환</div>
 </div>
 
 <div id="selector">
@@ -389,19 +397,19 @@ canvas {
   <div id="avatarGrid">
     <button class="avatarBtn selected" data-avatar="knight">
       <span class="avatarName">⚔️ 기사</span>
-      <span class="avatarDesc">갑옷과 방패</span>
+      <span class="avatarDesc">갑옷 · 방패 · 검</span>
     </button>
     <button class="avatarBtn" data-avatar="archer">
       <span class="avatarName">🏹 궁수</span>
-      <span class="avatarDesc">활과 후드</span>
+      <span class="avatarDesc">후드 · 활 · 화살통</span>
     </button>
     <button class="avatarBtn" data-avatar="mage">
       <span class="avatarName">🔮 마법사</span>
-      <span class="avatarDesc">지팡이와 로브</span>
+      <span class="avatarDesc">로브 · 지팡이 · 오브</span>
     </button>
     <button class="avatarBtn" data-avatar="rogue">
       <span class="avatarName">🗡️ 도적</span>
-      <span class="avatarDesc">단검과 망토</span>
+      <span class="avatarDesc">망토 · 후드 · 쌍단검</span>
     </button>
   </div>
 </div>
@@ -458,18 +466,16 @@ let serverIsFull = false;
 
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-
   canvas.width = Math.floor(innerWidth * dpr);
   canvas.height = Math.floor(innerHeight * dpr);
   canvas.style.width = innerWidth + 'px';
   canvas.style.height = innerHeight + 'px';
-
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 addEventListener('resize', resize);
 resize();
 
-function roundRectPath(ctx, x, y, w, h, r) {
+function roundRectPath(x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
   ctx.moveTo(x + rr, y);
@@ -554,9 +560,7 @@ socket.on('state', (state) => {
 addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
 
-  if (
-    ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)
-  ) {
+  if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
     keys.add(key);
     e.preventDefault();
   }
@@ -601,7 +605,6 @@ joystick.addEventListener('pointermove', (e) => {
 
 function releaseJoystick(e) {
   if (e.pointerId !== joystickPointer) return;
-
   joystickPointer = null;
   touchX = 0;
   touchY = 0;
@@ -659,7 +662,6 @@ function drawForest(cameraX, cameraY) {
   for (const clearing of decor.clearings) {
     if (!isVisible(clearing.x, clearing.y, 500, cameraX, cameraY)) continue;
     roundRectPath(
-      ctx,
       clearing.x - cameraX,
       clearing.y - cameraY,
       clearing.w,
@@ -673,7 +675,6 @@ function drawForest(cameraX, cameraY) {
   for (const path of decor.paths) {
     if (!isVisible(path.x, path.y, 500, cameraX, cameraY)) continue;
     roundRectPath(
-      ctx,
       path.x - cameraX,
       path.y - cameraY,
       path.w,
@@ -807,7 +808,7 @@ function drawForest(cameraX, cameraY) {
 
 function drawLabel(text, x, y) {
   ctx.fillStyle = 'rgba(0,0,0,.35)';
-  roundRectPath(ctx, x - 36, y - 18, 72, 18, 8);
+  roundRectPath(x - 36, y - 18, 72, 18, 8);
   ctx.fill();
 
   ctx.fillStyle = 'rgba(255,255,255,.96)';
@@ -818,217 +819,567 @@ function drawLabel(text, x, y) {
 
 function drawShadow() {
   ctx.beginPath();
-  ctx.ellipse(0, 20, 18, 8, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 18, 16, 8, 0, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(0,0,0,.24)';
   ctx.fill();
 }
 
-function drawKnight() {
-  drawShadow();
-
-  ctx.strokeStyle = '#39444e';
-  ctx.lineWidth = 7;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(-6, 4);
-  ctx.lineTo(-6, 18);
-  ctx.moveTo(6, 4);
-  ctx.lineTo(6, 18);
-  ctx.stroke();
-
-  roundRectPath(ctx, -12, -10, 24, 24, 8);
-  ctx.fillStyle = '#6d88a5';
+function drawLegsFront(leftColor, rightColor) {
+  ctx.fillStyle = leftColor;
+  roundRectPath(-10, 8, 8, 16, 3);
   ctx.fill();
 
-  ctx.beginPath();
-  ctx.arc(0, -19, 10, 0, Math.PI * 2);
-  ctx.fillStyle = '#d6dae1';
-  ctx.fill();
-
-  ctx.fillStyle = '#b13a3a';
-  ctx.fillRect(-2, -31, 4, 10);
-
-  ctx.strokeStyle = '#d9d9d9';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(10, -3);
-  ctx.lineTo(26, -10);
-  ctx.stroke();
-
-  ctx.strokeStyle = '#8b6743';
-  ctx.lineWidth = 5;
-  ctx.beginPath();
-  ctx.moveTo(6, 2);
-  ctx.lineTo(21, 8);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.arc(-16, -1, 8, 0, Math.PI * 2);
-  ctx.fillStyle = '#7c4f2f';
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(-16, -1, 4, 0, Math.PI * 2);
-  ctx.fillStyle = '#c9b27d';
+  ctx.fillStyle = rightColor;
+  roundRectPath(2, 8, 8, 16, 3);
   ctx.fill();
 }
 
-function drawArcher() {
-  drawShadow();
-
-  ctx.strokeStyle = '#4a3625';
-  ctx.lineWidth = 7;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(-6, 4);
-  ctx.lineTo(-6, 18);
-  ctx.moveTo(6, 4);
-  ctx.lineTo(6, 18);
-  ctx.stroke();
-
-  roundRectPath(ctx, -12, -10, 24, 24, 8);
-  ctx.fillStyle = '#4b8c54';
+function drawLegsBack(leftColor, rightColor) {
+  ctx.fillStyle = leftColor;
+  roundRectPath(-10, 8, 8, 16, 3);
   ctx.fill();
 
+  ctx.fillStyle = rightColor;
+  roundRectPath(2, 8, 8, 16, 3);
+  ctx.fill();
+}
+
+function drawSideLegs(color) {
+  ctx.fillStyle = color;
+  roundRectPath(-6, 8, 7, 15, 3);
+  ctx.fill();
+  roundRectPath(2, 10, 7, 13, 3);
+  ctx.fill();
+}
+
+function drawKnightFront() {
+  drawShadow();
+  drawLegsFront('#3d4651', '#3d4651');
+
+  ctx.fillStyle = '#8aa0b8';
+  roundRectPath(-13, -10, 26, 24, 8);
+  ctx.fill();
+
+  ctx.fillStyle = '#b63d3d';
+  ctx.fillRect(-2, -8, 4, 18);
+
   ctx.beginPath();
-  ctx.arc(0, -19, 10, 0, Math.PI * 2);
-  ctx.fillStyle = '#d7b08a';
+  ctx.arc(0, -22, 11, 0, Math.PI * 2);
+  ctx.fillStyle = '#d7dbe1';
+  ctx.fill();
+
+  ctx.fillStyle = '#2f3640';
+  ctx.fillRect(-6, -24, 12, 4);
+  ctx.fillRect(-5, -18, 10, 3);
+
+  ctx.beginPath();
+  ctx.arc(-3, -21, 1.4, 0, Math.PI * 2);
+  ctx.arc(3, -21, 1.4, 0, Math.PI * 2);
+  ctx.fillStyle = '#1d2227';
+  ctx.fill();
+
+  ctx.fillStyle = '#c53030';
+  ctx.fillRect(-2, -35, 4, 10);
+
+  ctx.fillStyle = '#7e5531';
+  ctx.fillRect(11, -5, 4, 18);
+  ctx.fillStyle = '#d6d9de';
+  ctx.fillRect(14, -10, 12, 4);
+  ctx.fillRect(22, -13, 5, 10);
+
+  ctx.beginPath();
+  ctx.arc(-18, -1, 8, 0, Math.PI * 2);
+  ctx.fillStyle = '#775339';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-18, -1, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#ccb26e';
+  ctx.fill();
+}
+
+function drawKnightBack() {
+  drawShadow();
+  drawLegsBack('#3d4651', '#3d4651');
+
+  ctx.fillStyle = '#7a8da3';
+  roundRectPath(-13, -10, 26, 24, 8);
+  ctx.fill();
+
+  ctx.fillStyle = '#c53030';
+  ctx.beginPath();
+  ctx.moveTo(-9, -8);
+  ctx.lineTo(9, -8);
+  ctx.lineTo(13, 11);
+  ctx.lineTo(-13, 11);
+  ctx.closePath();
   ctx.fill();
 
   ctx.beginPath();
   ctx.arc(0, -22, 11, 0, Math.PI * 2);
-  ctx.strokeStyle = '#2e5c37';
+  ctx.fillStyle = '#cfd4db';
+  ctx.fill();
+
+  ctx.fillStyle = '#a12323';
+  ctx.fillRect(-2, -35, 4, 10);
+
+  ctx.fillStyle = '#775339';
+  ctx.beginPath();
+  ctx.arc(-18, -1, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-18, -1, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#ccb26e';
+  ctx.fill();
+
+  ctx.fillStyle = '#7e5531';
+  ctx.fillRect(10, -6, 4, 18);
+  ctx.fillStyle = '#d6d9de';
+  ctx.fillRect(13, -12, 4, 12);
+}
+
+function drawKnightSide(faceRight) {
+  drawShadow();
+  drawSideLegs('#3d4651');
+
+  ctx.save();
+  if (!faceRight) ctx.scale(-1, 1);
+
+  ctx.fillStyle = '#8298b0';
+  roundRectPath(-10, -10, 22, 24, 8);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(2, -22, 10, 0, Math.PI * 2);
+  ctx.fillStyle = '#d5d9df';
+  ctx.fill();
+
+  ctx.fillStyle = '#1d2227';
+  ctx.fillRect(3, -22, 4, 3);
+
+  ctx.fillStyle = '#c53030';
+  ctx.fillRect(0, -34, 4, 9);
+
+  ctx.beginPath();
+  ctx.arc(-14, 0, 8, 0, Math.PI * 2);
+  ctx.fillStyle = '#775339';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-14, 0, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#ccb26e';
+  ctx.fill();
+
+  ctx.fillStyle = '#7e5531';
+  ctx.fillRect(10, -4, 4, 18);
+  ctx.fillStyle = '#d6d9de';
+  ctx.fillRect(14, -7, 13, 3);
+  ctx.fillRect(23, -10, 5, 9);
+
+  ctx.restore();
+}
+
+function drawArcherFront() {
+  drawShadow();
+  drawLegsFront('#5a4029', '#5a4029');
+
+  ctx.fillStyle = '#4f8f5b';
+  roundRectPath(-13, -10, 26, 24, 8);
+  ctx.fill();
+
+  ctx.fillStyle = '#7a5536';
+  ctx.fillRect(-2, -10, 4, 24);
+
+  ctx.beginPath();
+  ctx.arc(0, -22, 10, 0, Math.PI * 2);
+  ctx.fillStyle = '#dfb290';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(0, -24, 12, 0, Math.PI * 2);
+  ctx.strokeStyle = '#2d5d39';
   ctx.lineWidth = 6;
   ctx.stroke();
 
-  ctx.strokeStyle = '#8b5e34';
+  ctx.beginPath();
+  ctx.arc(-3, -22, 1.5, 0, Math.PI * 2);
+  ctx.arc(3, -22, 1.5, 0, Math.PI * 2);
+  ctx.fillStyle = '#2d2522';
+  ctx.fill();
+
+  ctx.strokeStyle = '#916334';
   ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.arc(18, 0, 12, -1.1, 1.1);
+  ctx.arc(19, -2, 12, -1.0, 1.0);
   ctx.stroke();
 
   ctx.strokeStyle = '#d9c0a2';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(13, -10);
-  ctx.lineTo(22, 10);
+  ctx.moveTo(14, -11);
+  ctx.lineTo(22, 8);
   ctx.stroke();
-
-  ctx.fillStyle = '#654321';
-  ctx.fillRect(-14, -12, 6, 18);
 }
 
-function drawMage() {
+function drawArcherBack() {
   drawShadow();
+  drawLegsBack('#5a4029', '#5a4029');
 
-  ctx.strokeStyle = '#4a2f66';
-  ctx.lineWidth = 7;
-  ctx.lineCap = 'round';
+  ctx.fillStyle = '#44774d';
+  roundRectPath(-13, -10, 26, 24, 8);
+  ctx.fill();
+
+  ctx.fillStyle = '#2d5d39';
   ctx.beginPath();
-  ctx.moveTo(-5, 3);
-  ctx.lineTo(-8, 18);
-  ctx.moveTo(5, 3);
-  ctx.lineTo(8, 18);
+  ctx.arc(0, -24, 12, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#5b3b23';
+  ctx.fillRect(-12, -15, 8, 24);
+
+  ctx.strokeStyle = '#916334';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(20, -1, 12, -1.0, 1.0);
   ctx.stroke();
 
+  ctx.strokeStyle = '#d9c0a2';
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(-13, 13);
-  ctx.lineTo(-9, -10);
-  ctx.lineTo(9, -10);
-  ctx.lineTo(13, 13);
-  ctx.closePath();
-  ctx.fillStyle = '#7054c8';
+  ctx.moveTo(15, -10);
+  ctx.lineTo(23, 10);
+  ctx.stroke();
+}
+
+function drawArcherSide(faceRight) {
+  drawShadow();
+  drawSideLegs('#5a4029');
+
+  ctx.save();
+  if (!faceRight) ctx.scale(-1, 1);
+
+  ctx.fillStyle = '#4a8755';
+  roundRectPath(-10, -10, 22, 24, 8);
   ctx.fill();
 
   ctx.beginPath();
-  ctx.arc(0, -19, 10, 0, Math.PI * 2);
-  ctx.fillStyle = '#e3bf9f';
+  ctx.arc(2, -22, 10, 0, Math.PI * 2);
+  ctx.fillStyle = '#dfb290';
   ctx.fill();
 
   ctx.beginPath();
-  ctx.moveTo(-10, -22);
-  ctx.lineTo(0, -34);
-  ctx.lineTo(10, -22);
-  ctx.closePath();
-  ctx.fillStyle = '#4c2e9a';
-  ctx.fill();
-
-  ctx.strokeStyle = '#7f5b36';
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(11, 2);
-  ctx.lineTo(24, -12);
+  ctx.arc(0, -24, 12, 0, Math.PI * 2);
+  ctx.strokeStyle = '#2d5d39';
+  ctx.lineWidth = 6;
   ctx.stroke();
 
+  ctx.fillStyle = '#2d2522';
   ctx.beginPath();
-  ctx.arc(27, -15, 5, 0, Math.PI * 2);
+  ctx.arc(6, -22, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = '#916334';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(18, 0, 11, -1.0, 1.0);
+  ctx.stroke();
+
+  ctx.fillStyle = '#5b3b23';
+  ctx.fillRect(-12, -14, 6, 22);
+
+  ctx.restore();
+}
+
+function drawMageFront() {
+  drawShadow();
+  drawLegsFront('#4c2f66', '#4c2f66');
+
+  ctx.beginPath();
+  ctx.moveTo(-14, 13);
+  ctx.lineTo(-10, -10);
+  ctx.lineTo(10, -10);
+  ctx.lineTo(14, 13);
+  ctx.closePath();
+  ctx.fillStyle = '#6a52c5';
+  ctx.fill();
+
+  ctx.fillStyle = '#8c75eb';
+  ctx.fillRect(-2, -7, 4, 16);
+
+  ctx.beginPath();
+  ctx.arc(0, -22, 10, 0, Math.PI * 2);
+  ctx.fillStyle = '#e2bd9f';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(-11, -24);
+  ctx.lineTo(0, -36);
+  ctx.lineTo(11, -24);
+  ctx.closePath();
+  ctx.fillStyle = '#4b2d97';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(-3, -22, 1.5, 0, Math.PI * 2);
+  ctx.arc(3, -22, 1.5, 0, Math.PI * 2);
+  ctx.fillStyle = '#2c203c';
+  ctx.fill();
+
+  ctx.fillStyle = '#7f5b36';
+  ctx.fillRect(12, -10, 4, 22);
+
+  ctx.beginPath();
+  ctx.arc(15, -14, 5, 0, Math.PI * 2);
   ctx.fillStyle = '#7ee0ff';
   ctx.fill();
 }
 
-function drawRogue() {
+function drawMageBack() {
   drawShadow();
+  drawLegsBack('#4c2f66', '#4c2f66');
 
-  ctx.strokeStyle = '#2e2e2e';
-  ctx.lineWidth = 7;
-  ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(-6, 4);
-  ctx.lineTo(-7, 18);
-  ctx.moveTo(6, 4);
-  ctx.lineTo(7, 18);
-  ctx.stroke();
+  ctx.moveTo(-14, 13);
+  ctx.lineTo(-10, -10);
+  ctx.lineTo(10, -10);
+  ctx.lineTo(14, 13);
+  ctx.closePath();
+  ctx.fillStyle = '#5d46b0';
+  ctx.fill();
 
-  roundRectPath(ctx, -12, -10, 24, 24, 8);
-  ctx.fillStyle = '#5c6673';
+  ctx.fillStyle = '#3f257e';
+  ctx.beginPath();
+  ctx.moveTo(-11, -24);
+  ctx.lineTo(0, -36);
+  ctx.lineTo(11, -24);
+  ctx.closePath();
   ctx.fill();
 
   ctx.beginPath();
-  ctx.arc(0, -19, 10, 0, Math.PI * 2);
-  ctx.fillStyle = '#dab090';
+  ctx.arc(0, -22, 10, 0, Math.PI * 2);
+  ctx.fillStyle = '#d1b39c';
+  ctx.fill();
+
+  ctx.fillStyle = '#7f5b36';
+  ctx.fillRect(12, -10, 4, 22);
+
+  ctx.beginPath();
+  ctx.arc(15, -14, 5, 0, Math.PI * 2);
+  ctx.fillStyle = '#7ee0ff';
+  ctx.fill();
+}
+
+function drawMageSide(faceRight) {
+  drawShadow();
+  drawSideLegs('#4c2f66');
+
+  ctx.save();
+  if (!faceRight) ctx.scale(-1, 1);
+
+  ctx.beginPath();
+  ctx.moveTo(-11, 13);
+  ctx.lineTo(-9, -10);
+  ctx.lineTo(9, -10);
+  ctx.lineTo(11, 13);
+  ctx.closePath();
+  ctx.fillStyle = '#6550c0';
   ctx.fill();
 
   ctx.beginPath();
-  ctx.arc(0, -22, 11, 0, Math.PI * 2);
-  ctx.strokeStyle = '#3e4650';
+  ctx.arc(1, -22, 10, 0, Math.PI * 2);
+  ctx.fillStyle = '#e2bd9f';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(-8, -24);
+  ctx.lineTo(1, -35);
+  ctx.lineTo(10, -24);
+  ctx.closePath();
+  ctx.fillStyle = '#4b2d97';
+  ctx.fill();
+
+  ctx.fillStyle = '#2c203c';
+  ctx.beginPath();
+  ctx.arc(6, -22, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#7f5b36';
+  ctx.fillRect(10, -10, 4, 22);
+
+  ctx.beginPath();
+  ctx.arc(13, -14, 5, 0, Math.PI * 2);
+  ctx.fillStyle = '#7ee0ff';
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawRogueFront() {
+  drawShadow();
+  drawLegsFront('#2f323a', '#2f323a');
+
+  ctx.fillStyle = '#5a6573';
+  roundRectPath(-13, -10, 26, 24, 8);
+  ctx.fill();
+
+  ctx.fillStyle = '#424a56';
+  ctx.beginPath();
+  ctx.moveTo(-12, -7);
+  ctx.lineTo(0, -15);
+  ctx.lineTo(12, -7);
+  ctx.lineTo(8, 12);
+  ctx.lineTo(-8, 12);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(0, -22, 10, 0, Math.PI * 2);
+  ctx.fillStyle = '#ddb090';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(0, -24, 12, 0, Math.PI * 2);
+  ctx.strokeStyle = '#3d4650';
   ctx.lineWidth = 6;
   ctx.stroke();
 
-  ctx.strokeStyle = '#c8d1d9';
-  ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.moveTo(10, -4);
-  ctx.lineTo(22, -14);
-  ctx.moveTo(10, 4);
-  ctx.lineTo(22, 14);
+  ctx.arc(-3, -22, 1.5, 0, Math.PI * 2);
+  ctx.arc(3, -22, 1.5, 0, Math.PI * 2);
+  ctx.fillStyle = '#1e2329';
+  ctx.fill();
+
+  ctx.fillStyle = '#cfd6df';
+  ctx.fillRect(11, -5, 12, 3);
+  ctx.fillRect(-23, -5, 12, 3);
+
+  ctx.beginPath();
+  ctx.moveTo(22, -7);
+  ctx.lineTo(28, -4);
+  ctx.lineTo(22, -1);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(-22, -7);
+  ctx.lineTo(-28, -4);
+  ctx.lineTo(-22, -1);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawRogueBack() {
+  drawShadow();
+  drawLegsBack('#2f323a', '#2f323a');
+
+  ctx.fillStyle = '#4f5966';
+  roundRectPath(-13, -10, 26, 24, 8);
+  ctx.fill();
+
+  ctx.fillStyle = '#353d46';
+  ctx.beginPath();
+  ctx.moveTo(-12, -8);
+  ctx.lineTo(12, -8);
+  ctx.lineTo(6, 13);
+  ctx.lineTo(-6, 13);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(0, -24, 12, 0, Math.PI * 2);
+  ctx.fillStyle = '#3d4650';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(0, -22, 10, 0, Math.PI * 2);
+  ctx.fillStyle = '#cfb099';
+  ctx.fill();
+
+  ctx.fillStyle = '#cfd6df';
+  ctx.fillRect(11, -5, 11, 3);
+  ctx.fillRect(-22, -5, 11, 3);
+}
+
+function drawRogueSide(faceRight) {
+  drawShadow();
+  drawSideLegs('#2f323a');
+
+  ctx.save();
+  if (!faceRight) ctx.scale(-1, 1);
+
+  ctx.fillStyle = '#58626f';
+  roundRectPath(-10, -10, 22, 24, 8);
+  ctx.fill();
+
+  ctx.fillStyle = '#404953';
+  ctx.beginPath();
+  ctx.moveTo(-10, -8);
+  ctx.lineTo(10, -8);
+  ctx.lineTo(4, 13);
+  ctx.lineTo(-4, 13);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(1, -22, 10, 0, Math.PI * 2);
+  ctx.fillStyle = '#ddb090';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(0, -24, 12, 0, Math.PI * 2);
+  ctx.strokeStyle = '#3d4650';
+  ctx.lineWidth = 6;
   ctx.stroke();
 
-  ctx.strokeStyle = '#262b31';
-  ctx.lineWidth = 5;
+  ctx.fillStyle = '#1e2329';
   ctx.beginPath();
-  ctx.moveTo(-8, -6);
-  ctx.lineTo(-18, -11);
-  ctx.stroke();
+  ctx.arc(6, -22, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#cfd6df';
+  ctx.fillRect(10, -3, 12, 3);
+
+  ctx.beginPath();
+  ctx.moveTo(22, -5);
+  ctx.lineTo(28, -2);
+  ctx.lineTo(22, 1);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawAvatar(avatar, dir) {
+  if (avatar === 'knight') {
+    if (dir === 'back') return drawKnightBack();
+    if (dir === 'left') return drawKnightSide(false);
+    if (dir === 'right') return drawKnightSide(true);
+    return drawKnightFront();
+  }
+
+  if (avatar === 'archer') {
+    if (dir === 'back') return drawArcherBack();
+    if (dir === 'left') return drawArcherSide(false);
+    if (dir === 'right') return drawArcherSide(true);
+    return drawArcherFront();
+  }
+
+  if (avatar === 'mage') {
+    if (dir === 'back') return drawMageBack();
+    if (dir === 'left') return drawMageSide(false);
+    if (dir === 'right') return drawMageSide(true);
+    return drawMageFront();
+  }
+
+  if (dir === 'back') return drawRogueBack();
+  if (dir === 'left') return drawRogueSide(false);
+  if (dir === 'right') return drawRogueSide(true);
+  return drawRogueFront();
 }
 
 function drawCharacter(player, screenX, screenY, mine) {
   ctx.save();
   ctx.translate(screenX, screenY);
-  ctx.rotate(player.angle || 0);
 
-  switch (player.avatar) {
-    case 'archer':
-      drawArcher();
-      break;
-    case 'mage':
-      drawMage();
-      break;
-    case 'rogue':
-      drawRogue();
-      break;
-    default:
-      drawKnight();
-      break;
-  }
+  drawAvatar(player.avatar || 'knight', player.dir || 'front');
 
   if (mine) {
     ctx.beginPath();
@@ -1040,7 +1391,7 @@ function drawCharacter(player, screenX, screenY, mine) {
 
   ctx.restore();
 
-  drawLabel(mine ? 'YOU' : 'P-' + player.id.slice(0, 4), screenX, screenY - 28);
+  drawLabel(mine ? 'YOU' : 'P-' + player.id.slice(0, 4), screenX, screenY - 30);
 }
 
 function render() {
