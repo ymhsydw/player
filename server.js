@@ -1,6 +1,7 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
+const express = require('express');
+const http = require('http');
+const path = require('path');
+const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
@@ -8,395 +9,1048 @@ const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 
-// ======================================================
-// 게임 설정
-// ======================================================
-
 const WORLD = {
   width: 5200,
   height: 3400
 };
 
-const PLAYER_RADIUS = 25;
-const PLAYER_SPEED = 300;
-const TICK_RATE = 30;
 const MAX_PLAYERS = 20;
 
-const AVATARS = [
-  "knight",
-  "archer",
-  "mage",
-  "rogue"
-];
+const PLAYER_RADIUS = 24;
+const PLAYER_SPEED = 300;
+const TICK_RATE = 30;
+
+
+// ==============================
+// 슬라임 설정
+// ==============================
+
+const NORMAL_SLIMES = 28;
+const ELITE_SLIMES = 4;
+
+const SLIME_RESPAWN_MS = 5000;
+
+
+// ==============================
+// 파이어볼 설정
+// ==============================
+
+const FIREBALL_SPEED = 900;
+const FIREBALL_DAMAGE = 60;
+const FIREBALL_RADIUS = 14;
+const FIREBALL_LIFE = 1.35;
+const FIREBALL_COOLDOWN = 900;
+
 
 const players = new Map();
+const slimes = new Map();
+const fireballs = new Map();
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
+let nextSlimeId = 1;
+let nextFireballId = 1;
 
-// ======================================================
-// 숲 생성
-// ======================================================
 
-function createRng(seed) {
-  let s = seed >>> 0;
+function clamp(v, min, max) {
 
-  return function () {
-    s = (s * 1664525 + 1013904223) >>> 0;
-    return s / 4294967296;
-  };
-}
-
-function generateForest() {
-  const rand = createRng(92741);
-
-  const forest = {
-    trees: [],
-    bushes: [],
-    rocks: [],
-    flowers: [],
-    ponds: [],
-    paths: []
-  };
-
-  forest.paths.push(
-    { x: 200, y: 1550, w: 4800, h: 110 },
-    { x: 2480, y: 200, w: 130, h: 3000 },
-    { x: 700, y: 750, w: 2100, h: 90 },
-    { x: 2550, y: 2450, w: 1700, h: 90 }
+  return Math.max(
+    min,
+    Math.min(
+      max,
+      v
+    )
   );
-
-  for (let i = 0; i < 190; i++) {
-    forest.trees.push({
-      x: 100 + rand() * (WORLD.width - 200),
-      y: 100 + rand() * (WORLD.height - 200),
-      size: 25 + rand() * 28
-    });
-  }
-
-  for (let i = 0; i < 110; i++) {
-    forest.bushes.push({
-      x: 80 + rand() * (WORLD.width - 160),
-      y: 80 + rand() * (WORLD.height - 160),
-      size: 12 + rand() * 16
-    });
-  }
-
-  for (let i = 0; i < 65; i++) {
-    forest.rocks.push({
-      x: 80 + rand() * (WORLD.width - 160),
-      y: 80 + rand() * (WORLD.height - 160),
-      size: 10 + rand() * 18
-    });
-  }
-
-  for (let i = 0; i < 240; i++) {
-    forest.flowers.push({
-      x: rand() * WORLD.width,
-      y: rand() * WORLD.height,
-      color: [
-        "#ffe082",
-        "#ff9e9e",
-        "#d6a7ff",
-        "#9ee7ff",
-        "#ffffff"
-      ][Math.floor(rand() * 5)]
-    });
-  }
-
-  for (let i = 0; i < 5; i++) {
-    forest.ponds.push({
-      x: 600 + rand() * 4000,
-      y: 500 + rand() * 2300,
-      rx: 70 + rand() * 90,
-      ry: 50 + rand() * 60
-    });
-  }
-
-  return forest;
 }
 
-const FOREST = generateForest();
 
-// ======================================================
-// 플레이어
-// ======================================================
+function randomPoint(
+  margin = 120
+) {
 
-function makePlayer(id) {
   return {
-    id,
 
     x:
-      600 +
+      margin +
       Math.random() *
-      (WORLD.width - 1200),
+      (
+        WORLD.width -
+        margin * 2
+      ),
 
     y:
-      600 +
+      margin +
       Math.random() *
-      (WORLD.height - 1200),
+      (
+        WORLD.height -
+        margin * 2
+      )
 
-    inputX: 0,
-    inputY: 0,
-
-    direction: "front",
-
-    moving: false,
-
-    avatar: "knight"
   };
 }
 
-function getDirection(x, y, previous) {
+
+// ==============================
+// 플레이어 방향
+// ==============================
+
+function directionFromInput(
+  x,
+  y,
+  previous = 'front'
+) {
+
   if (
     Math.abs(x) < 0.05 &&
     Math.abs(y) < 0.05
   ) {
+
     return previous;
+
   }
 
-  if (Math.abs(x) > Math.abs(y)) {
+
+  if (
+    Math.abs(x) >
+    Math.abs(y)
+  ) {
+
     return x > 0
-      ? "right"
-      : "left";
+      ? 'right'
+      : 'left';
+
   }
+
 
   return y > 0
-    ? "front"
-    : "back";
+    ? 'front'
+    : 'back';
 }
 
-// ======================================================
-// 멀티 서버
-// ======================================================
 
-io.on("connection", (socket) => {
+function directionVector(
+  direction
+) {
 
-  if (players.size >= MAX_PLAYERS) {
+  if (
+    direction === 'back'
+  ) {
 
-    socket.emit("serverFull", {
-      maxPlayers: MAX_PLAYERS
-    });
+    return {
+      x: 0,
+      y: -1
+    };
 
-    setTimeout(() => {
-      socket.disconnect(true);
-    }, 400);
-
-    return;
   }
 
-  const player =
-    makePlayer(socket.id);
 
-  players.set(
-    socket.id,
-    player
+  if (
+    direction === 'left'
+  ) {
+
+    return {
+      x: -1,
+      y: 0
+    };
+
+  }
+
+
+  if (
+    direction === 'right'
+  ) {
+
+    return {
+      x: 1,
+      y: 0
+    };
+
+  }
+
+
+  return {
+    x: 0,
+    y: 1
+  };
+}
+
+
+// ==============================
+// 플레이어 생성
+// ==============================
+
+function makePlayer(id) {
+
+  const p =
+    randomPoint(450);
+
+
+  return {
+
+    id,
+
+    x: p.x,
+    y: p.y,
+
+    inputX: 0,
+    inputY: 0,
+
+    direction: 'front',
+
+    moving: false,
+
+    lastFireballAt: 0
+
+  };
+}
+
+
+// ==============================
+// 슬라임
+// ==============================
+
+function chooseSlimeDirection(
+  slime
+) {
+
+  const angle =
+    Math.random() *
+    Math.PI *
+    2;
+
+
+  const speed =
+    slime.elite
+      ? 55 +
+        Math.random() *
+        25
+
+      : 40 +
+        Math.random() *
+        30;
+
+
+  slime.vx =
+    Math.cos(angle) *
+    speed;
+
+
+  slime.vy =
+    Math.sin(angle) *
+    speed;
+
+
+  slime.changeAt =
+    Date.now() +
+    900 +
+    Math.random() *
+    2600;
+}
+
+
+function createSlime(
+  elite = false
+) {
+
+  const p =
+    randomPoint(180);
+
+
+  const slime = {
+
+    id:
+      nextSlimeId++,
+
+    x:
+      p.x,
+
+    y:
+      p.y,
+
+    elite,
+
+    radius:
+      elite
+        ? 34
+        : 24,
+
+    maxHp:
+      elite
+        ? 180
+        : 60,
+
+    hp:
+      elite
+        ? 180
+        : 60,
+
+    vx: 0,
+    vy: 0,
+
+    changeAt: 0,
+
+    alive: true,
+
+    respawnAt: 0
+
+  };
+
+
+  chooseSlimeDirection(
+    slime
   );
 
-  socket.emit("welcome", {
-    id: socket.id,
-    world: WORLD,
-    maxPlayers: MAX_PLAYERS,
-    forest: FOREST
-  });
 
-  io.emit("count", {
-    current: players.size,
-    max: MAX_PLAYERS
-  });
+  slimes.set(
+    slime.id,
+    slime
+  );
+}
 
-  // 이동
-  socket.on("input", (data = {}) => {
 
-    const player =
-      players.get(socket.id);
+for (
+  let i = 0;
+  i < NORMAL_SLIMES;
+  i++
+) {
 
-    if (!player) return;
+  createSlime(false);
 
-    let x =
-      Number(data.x) || 0;
+}
 
-    let y =
-      Number(data.y) || 0;
 
-    const length =
-      Math.hypot(x, y);
+for (
+  let i = 0;
+  i < ELITE_SLIMES;
+  i++
+) {
 
-    if (length > 1) {
-      x /= length;
-      y /= length;
-    }
+  createSlime(true);
 
-    player.inputX =
-      clamp(x, -1, 1);
+}
 
-    player.inputY =
-      clamp(y, -1, 1);
 
-    player.moving =
-      Math.abs(x) > 0.05 ||
-      Math.abs(y) > 0.05;
+function respawnSlime(
+  slime
+) {
 
-    player.direction =
-      getDirection(
-        x,
-        y,
-        player.direction
-      );
-  });
+  const p =
+    randomPoint(180);
 
-  // 캐릭터 변경
-  socket.on(
-    "setAvatar",
-    (data = {}) => {
 
-      const player =
-        players.get(socket.id);
+  slime.x =
+    p.x;
 
-      if (!player) return;
+  slime.y =
+    p.y;
 
-      const avatar =
-        String(
-          data.avatar || ""
-        );
 
-      if (
-        !AVATARS.includes(
-          avatar
-        )
-      ) {
-        return;
-      }
+  slime.hp =
+    slime.maxHp;
 
-      player.avatar =
-        avatar;
+
+  slime.alive =
+    true;
+
+
+  slime.respawnAt =
+    0;
+
+
+  chooseSlimeDirection(
+    slime
+  );
+}
+
+
+// ==============================
+// 파이어볼
+// ==============================
+
+function castFireball(
+  player
+) {
+
+  const now =
+    Date.now();
+
+
+  if (
+    now -
+    player.lastFireballAt <
+    FIREBALL_COOLDOWN
+  ) {
+
+    return;
+
+  }
+
+
+  player.lastFireballAt =
+    now;
+
+
+  const direction =
+    directionVector(
+      player.direction
+    );
+
+
+  const id =
+    nextFireballId++;
+
+
+  fireballs.set(
+    id,
+    {
+
+      id,
+
+      ownerId:
+        player.id,
+
+      x:
+        player.x +
+        direction.x *
+        42,
+
+      y:
+        player.y +
+        direction.y *
+        42,
+
+      vx:
+        direction.x *
+        FIREBALL_SPEED,
+
+      vy:
+        direction.y *
+        FIREBALL_SPEED,
+
+      radius:
+        FIREBALL_RADIUS,
+
+      life:
+        FIREBALL_LIFE
+
     }
   );
+}
 
-  socket.on(
-    "disconnect",
-    () => {
 
-      players.delete(
-        socket.id
-      );
+// ==============================
+// 접속
+// ==============================
 
-      io.emit(
-        "count",
+io.on(
+  'connection',
+  socket => {
+
+    if (
+      players.size >=
+      MAX_PLAYERS
+    ) {
+
+      socket.emit(
+        'serverFull',
         {
-          current:
-            players.size,
-
-          max:
+          maxPlayers:
             MAX_PLAYERS
         }
       );
+
+
+      setTimeout(
+        () => {
+
+          socket.disconnect(
+            true
+          );
+
+        },
+
+        400
+      );
+
+
+      return;
     }
-  );
-});
 
-// ======================================================
-// 서버 이동 계산
-// ======================================================
 
-let previousTime =
-  Date.now();
+    const player =
+      makePlayer(
+        socket.id
+      );
 
-setInterval(() => {
 
-  const currentTime =
-    Date.now();
-
-  const dt =
-    Math.min(
-      (currentTime -
-        previousTime) /
-        1000,
-
-      0.1
+    players.set(
+      socket.id,
+      player
     );
 
-  previousTime =
-    currentTime;
 
-  for (
-    const player
-    of players.values()
-  ) {
+    socket.emit(
+      'welcome',
+      {
 
-    player.x +=
-      player.inputX *
-      PLAYER_SPEED *
-      dt;
-
-    player.y +=
-      player.inputY *
-      PLAYER_SPEED *
-      dt;
-
-    player.x =
-      clamp(
-        player.x,
-        PLAYER_RADIUS,
-        WORLD.width -
-          PLAYER_RADIUS
-      );
-
-    player.y =
-      clamp(
-        player.y,
-        PLAYER_RADIUS,
-        WORLD.height -
-          PLAYER_RADIUS
-      );
-  }
-
-  io.emit(
-    "state",
-
-    Array.from(
-      players.values(),
-
-      player => ({
         id:
-          player.id,
+          socket.id,
 
-        x:
+        world:
+          WORLD,
+
+        maxPlayers:
+          MAX_PLAYERS,
+
+        fireballCooldown:
+          FIREBALL_COOLDOWN
+
+      }
+    );
+
+
+    io.emit(
+      'count',
+      {
+
+        current:
+          players.size,
+
+        max:
+          MAX_PLAYERS
+
+      }
+    );
+
+
+    // 이동
+    socket.on(
+      'input',
+      (data = {}) => {
+
+        const player =
+          players.get(
+            socket.id
+          );
+
+
+        if (!player)
+          return;
+
+
+        let x =
+          Number(
+            data.x
+          ) || 0;
+
+
+        let y =
+          Number(
+            data.y
+          ) || 0;
+
+
+        const length =
+          Math.hypot(
+            x,
+            y
+          );
+
+
+        if (
+          length > 1
+        ) {
+
+          x /=
+            length;
+
+          y /=
+            length;
+        }
+
+
+        player.inputX =
+          clamp(
+            x,
+            -1,
+            1
+          );
+
+
+        player.inputY =
+          clamp(
+            y,
+            -1,
+            1
+          );
+
+
+        player.moving =
+          Math.abs(x) > 0.05 ||
+          Math.abs(y) > 0.05;
+
+
+        player.direction =
+          directionFromInput(
+            x,
+            y,
+            player.direction
+          );
+      }
+    );
+
+
+    // E 파이어볼
+    socket.on(
+      'castFireball',
+      () => {
+
+        const player =
+          players.get(
+            socket.id
+          );
+
+
+        if (player) {
+
+          castFireball(
+            player
+          );
+
+        }
+      }
+    );
+
+
+    socket.on(
+      'disconnect',
+      () => {
+
+        players.delete(
+          socket.id
+        );
+
+
+        io.emit(
+          'count',
+          {
+
+            current:
+              players.size,
+
+            max:
+              MAX_PLAYERS
+
+          }
+        );
+      }
+    );
+
+  }
+);
+
+
+// ==============================
+// 게임 업데이트
+// ==============================
+
+let lastTime =
+  Date.now();
+
+
+setInterval(
+  () => {
+
+    const now =
+      Date.now();
+
+
+    const dt =
+      Math.min(
+        (
+          now -
+          lastTime
+        ) /
+        1000,
+
+        0.1
+      );
+
+
+    lastTime =
+      now;
+
+
+    // 플레이어 이동
+    for (
+      const player
+      of players.values()
+    ) {
+
+      player.x +=
+        player.inputX *
+        PLAYER_SPEED *
+        dt;
+
+
+      player.y +=
+        player.inputY *
+        PLAYER_SPEED *
+        dt;
+
+
+      player.x =
+        clamp(
           player.x,
+          PLAYER_RADIUS,
+          WORLD.width -
+          PLAYER_RADIUS
+        );
 
-        y:
+
+      player.y =
+        clamp(
           player.y,
+          PLAYER_RADIUS,
+          WORLD.height -
+          PLAYER_RADIUS
+        );
+    }
 
-        avatar:
-          player.avatar,
 
-        direction:
-          player.direction,
+    // 슬라임 이동
+    for (
+      const slime
+      of slimes.values()
+    ) {
 
-        moving:
-          player.moving
-      })
-    )
-  );
+      if (
+        !slime.alive
+      ) {
 
-}, 1000 / TICK_RATE);
+        if (
+          now >=
+          slime.respawnAt
+        ) {
 
-// ======================================================
+          respawnSlime(
+            slime
+          );
+
+        }
+
+
+        continue;
+      }
+
+
+      if (
+        now >=
+        slime.changeAt
+      ) {
+
+        chooseSlimeDirection(
+          slime
+        );
+
+      }
+
+
+      slime.x +=
+        slime.vx *
+        dt;
+
+
+      slime.y +=
+        slime.vy *
+        dt;
+
+
+      if (
+        slime.x <
+        slime.radius ||
+
+        slime.x >
+        WORLD.width -
+        slime.radius
+      ) {
+
+        slime.vx *=
+          -1;
+
+
+        slime.x =
+          clamp(
+            slime.x,
+            slime.radius,
+            WORLD.width -
+            slime.radius
+          );
+      }
+
+
+      if (
+        slime.y <
+        slime.radius ||
+
+        slime.y >
+        WORLD.height -
+        slime.radius
+      ) {
+
+        slime.vy *=
+          -1;
+
+
+        slime.y =
+          clamp(
+            slime.y,
+            slime.radius,
+            WORLD.height -
+            slime.radius
+          );
+      }
+    }
+
+
+    // 파이어볼
+    for (
+      const fireball
+      of Array.from(
+        fireballs.values()
+      )
+    ) {
+
+      fireball.x +=
+        fireball.vx *
+        dt;
+
+
+      fireball.y +=
+        fireball.vy *
+        dt;
+
+
+      fireball.life -=
+        dt;
+
+
+      if (
+        fireball.life <= 0 ||
+
+        fireball.x < -50 ||
+
+        fireball.x >
+        WORLD.width + 50 ||
+
+        fireball.y < -50 ||
+
+        fireball.y >
+        WORLD.height + 50
+      ) {
+
+        fireballs.delete(
+          fireball.id
+        );
+
+
+        continue;
+      }
+
+
+      // 슬라임 명중
+      for (
+        const slime
+        of slimes.values()
+      ) {
+
+        if (
+          !slime.alive
+        ) {
+
+          continue;
+        }
+
+
+        const dx =
+          slime.x -
+          fireball.x;
+
+
+        const dy =
+          slime.y -
+          fireball.y;
+
+
+        const hitDistance =
+          slime.radius +
+          fireball.radius;
+
+
+        if (
+          dx * dx +
+          dy * dy <=
+
+          hitDistance *
+          hitDistance
+        ) {
+
+          slime.hp -=
+            FIREBALL_DAMAGE;
+
+
+          fireballs.delete(
+            fireball.id
+          );
+
+
+          if (
+            slime.hp <= 0
+          ) {
+
+            slime.alive =
+              false;
+
+
+            slime.respawnAt =
+              now +
+              SLIME_RESPAWN_MS;
+
+          }
+
+
+          break;
+        }
+      }
+    }
+
+
+    // 전체 상태 전송
+    io.emit(
+      'state',
+      {
+
+        players:
+          Array.from(
+            players.values(),
+
+            player => ({
+
+              id:
+                player.id,
+
+              x:
+                player.x,
+
+              y:
+                player.y,
+
+              direction:
+                player.direction,
+
+              moving:
+                player.moving
+
+            })
+          ),
+
+
+        slimes:
+          Array.from(
+            slimes.values(),
+
+            slime => ({
+
+              id:
+                slime.id,
+
+              x:
+                slime.x,
+
+              y:
+                slime.y,
+
+              elite:
+                slime.elite,
+
+              hp:
+                slime.hp,
+
+              maxHp:
+                slime.maxHp,
+
+              alive:
+                slime.alive
+
+            })
+          ),
+
+
+        fireballs:
+          Array.from(
+            fireballs.values(),
+
+            fireball => ({
+
+              id:
+                fireball.id,
+
+              x:
+                fireball.x,
+
+              y:
+                fireball.y,
+
+              radius:
+                fireball.radius
+
+            })
+          )
+
+      }
+    );
+
+  },
+
+  1000 /
+  TICK_RATE
+);
+
+
+// ==============================
+// 마법사 이미지
+// ==============================
+
+app.get(
+  '/mage.png',
+  (_req, res) => {
+
+    res.sendFile(
+      path.join(
+        __dirname,
+        'mage.png'
+      )
+    );
+
+  }
+);
+
+
+// ==============================
 // 게임 화면
-// ======================================================
+// ==============================
 
-app.get("/", (_req, res) => {
+app.get(
+  '/',
+  (_req, res) => {
 
-res.type("html").send(`
+res.type('html').send(`
 
-<!DOCTYPE html>
+<!doctype html>
 
 <html lang="ko">
 
 <head>
 
-<meta charset="UTF-8">
+<meta charset="utf-8">
 
 <meta
 name="viewport"
@@ -408,7 +1062,10 @@ user-scalable=no,
 viewport-fit=cover
 ">
 
-<title>Forest RPG</title>
+<title>
+Forest Mage RPG
+</title>
+
 
 <style>
 
@@ -427,7 +1084,7 @@ body {
   overflow: hidden;
 
   background:
-    #1c3219;
+    #20391d;
 
   font-family:
     system-ui,
@@ -444,23 +1101,30 @@ canvas {
   height: 100%;
 }
 
+
 #hud {
 
-  position: fixed;
+  position:
+    fixed;
 
-  top: 12px;
-  left: 12px;
+  left:
+    12px;
 
-  z-index: 20;
+  top:
+    12px;
 
-  color: white;
+  z-index:
+    20;
+
+  color:
+    white;
 
   background:
     rgba(
-      10,
-      18,
-      10,
-      .78
+      9,
+      14,
+      9,
+      .72
     );
 
   border:
@@ -488,160 +1152,43 @@ canvas {
     blur(6px);
 }
 
+
 #status {
-  font-weight: 800;
-}
-
-#characterPanel {
-
-  position: fixed;
-
-  right: 12px;
-  top: 12px;
-
-  width: 300px;
-
-  max-width:
-    calc(
-      100vw -
-      24px
-    );
-
-  z-index: 30;
-
-  background:
-    rgba(
-      10,
-      18,
-      10,
-      .82
-    );
-
-  color: white;
-
-  border-radius:
-    14px;
-
-  padding:
-    12px;
-
-  border:
-    1px solid
-    rgba(
-      255,
-      255,
-      255,
-      .18
-    );
-
-  backdrop-filter:
-    blur(8px);
-}
-
-#characterTitle {
-
-  font-weight: 900;
-
-  margin-bottom:
-    9px;
-}
-
-#characterGrid {
-
-  display: grid;
-
-  grid-template-columns:
-    1fr 1fr;
-
-  gap: 7px;
-}
-
-.characterButton {
-
-  min-height:
-    55px;
-
-  border-radius:
-    10px;
-
-  border:
-    2px solid
-    rgba(
-      255,
-      255,
-      255,
-      .12
-    );
-
-  color: white;
-
-  background:
-    rgba(
-      255,
-      255,
-      255,
-      .07
-    );
-
-  font:
-    inherit;
-
-  text-align:
-    left;
-
-  padding:
-    8px;
-
-  cursor: pointer;
-}
-
-.characterButton.selected {
-
-  border-color:
-    #ffe082;
-
-  background:
-    rgba(
-      255,
-      224,
-      130,
-      .15
-    );
-}
-
-.className {
-
-  display: block;
 
   font-weight:
-    900;
+    800;
 }
 
-.classInfo {
 
-  display: block;
+.skillText {
 
-  margin-top:
-    2px;
+  color:
+    #ffcc80;
 
-  font-size:
-    11px;
-
-  opacity:
-    .8;
+  font-weight:
+    800;
 }
+
 
 #joystick {
 
-  position: fixed;
+  position:
+    fixed;
 
-  left: 22px;
-  bottom: 22px;
+  left:
+    22px;
 
-  z-index: 30;
+  bottom:
+    22px;
 
-  width: 145px;
-  height: 145px;
+  z-index:
+    30;
+
+  width:
+    145px;
+
+  height:
+    145px;
 
   border-radius:
     50%;
@@ -664,16 +1211,23 @@ canvas {
     );
 }
 
+
 #stick {
 
   position:
     absolute;
 
-  width: 52px;
-  height: 52px;
+  left:
+    46px;
 
-  left: 45px;
-  top: 45px;
+  top:
+    46px;
+
+  width:
+    52px;
+
+  height:
+    52px;
 
   border-radius:
     50%;
@@ -683,32 +1237,134 @@ canvas {
       255,
       255,
       255,
-      .85
+      .84
     );
 
   pointer-events:
     none;
 }
 
+
+#skillE {
+
+  position:
+    fixed;
+
+  right:
+    28px;
+
+  bottom:
+    32px;
+
+  z-index:
+    30;
+
+  width:
+    94px;
+
+  height:
+    94px;
+
+  border-radius:
+    50%;
+
+  border:
+    3px solid
+    rgba(
+      255,
+      214,
+      128,
+      .85
+    );
+
+  background:
+    rgba(
+      137,
+      45,
+      24,
+      .82
+    );
+
+  color:
+    white;
+
+  font:
+    900 17px
+    system-ui;
+
+  box-shadow:
+    0 5px 18px
+    rgba(
+      0,
+      0,
+      0,
+      .3
+    );
+
+  touch-action:
+    none;
+}
+
+
+#skillE:active {
+
+  transform:
+    scale(.96);
+}
+
+
+#skillE.cooling {
+
+  opacity:
+    .55;
+}
+
+
+#tip {
+
+  position:
+    fixed;
+
+  right:
+    16px;
+
+  bottom:
+    138px;
+
+  z-index:
+    20;
+
+  color:
+    white;
+
+  background:
+    rgba(
+      0,
+      0,
+      0,
+      .38
+    );
+
+  border-radius:
+    9px;
+
+  padding:
+    7px 10px;
+
+  font-size:
+    12px;
+}
+
+
 @media (
-  max-width: 720px
+  pointer: fine
 ) {
 
-  #characterPanel {
+  #joystick {
 
-    top: auto;
+    opacity:
+      .36;
 
-    bottom: 12px;
-
-    right: 10px;
-
-    width: 220px;
-  }
-
-  .characterButton {
-
-    min-height:
-      48px;
   }
 
 }
@@ -717,9 +1373,12 @@ canvas {
 
 </head>
 
+
 <body>
 
+
 <canvas id="game"></canvas>
+
 
 <div id="hud">
 
@@ -740,205 +1399,208 @@ canvas {
 </div>
 
 <div>
-캐릭터:
-<span id="currentClass">
-기사
-</span>
-</div>
-
-</div>
-
-<div id="characterPanel">
-
-<div id="characterTitle">
-캐릭터 선택
-</div>
-
-<div id="characterGrid">
-
-<button
-class="characterButton selected"
-data-avatar="knight">
-
-<span class="className">
-⚔️ 기사
-</span>
-
-<span class="classInfo">
-검 · 방패 · 중갑
-</span>
-
-</button>
-
-
-<button
-class="characterButton"
-data-avatar="archer">
-
-<span class="className">
-🏹 궁수
-</span>
-
-<span class="classInfo">
-활 · 화살통 · 망토
-</span>
-
-</button>
-
-
-<button
-class="characterButton"
-data-avatar="mage">
-
-<span class="className">
+직업:
 🔮 마법사
+</div>
+
+<div>
+스킬:
+<span class="skillText">
+E · 파이어볼
 </span>
+</div>
 
-<span class="classInfo">
-지팡이 · 마법 · 로브
-</span>
-
-</button>
-
-
-<button
-class="characterButton"
-data-avatar="rogue">
-
-<span class="className">
-🗡️ 도적
-</span>
-
-<span class="classInfo">
-쌍단검 · 붉은 스카프
-</span>
-
-</button>
-
+<div>
+슬라임:
+일반 28 · 엘리트 4
 </div>
 
 </div>
+
 
 <div id="joystick">
-<div id="stick"></div>
+
+<div id="stick">
 </div>
+
+</div>
+
+
+<button
+id="skillE"
+type="button">
+
+E
+<br>
+파이어볼
+
+</button>
+
+
+<div id="tip">
+PC: WASD + E ·
+모바일: 조이스틱 + E 버튼
+</div>
+
 
 <script
 src="/socket.io/socket.io.js">
 </script>
 
-<script>
 
-// ======================================================
-// 기본
-// ======================================================
+<script>
 
 const socket =
   io();
 
+
 const canvas =
   document.getElementById(
-    "game"
+    'game'
   );
+
 
 const ctx =
   canvas.getContext(
-    "2d"
+    '2d'
   );
 
-ctx.imageSmoothingEnabled =
-  false;
 
 const statusEl =
   document.getElementById(
-    "status"
+    'status'
   );
+
 
 const countEl =
   document.getElementById(
-    "count"
+    'count'
   );
+
 
 const maxCountEl =
   document.getElementById(
-    "maxCount"
+    'maxCount'
   );
 
-const currentClassEl =
-  document.getElementById(
-    "currentClass"
-  );
 
 const joystick =
   document.getElementById(
-    "joystick"
+    'joystick'
   );
+
 
 const stick =
   document.getElementById(
-    "stick"
+    'stick'
   );
 
-const characterButtons =
-  Array.from(
-    document.querySelectorAll(
-      ".characterButton"
-    )
+
+const skillE =
+  document.getElementById(
+    'skillE'
   );
 
-const classNames = {
-
-  knight:
-    "기사",
-
-  archer:
-    "궁수",
-
-  mage:
-    "마법사",
-
-  rogue:
-    "도적"
-};
 
 let myId =
   null;
 
-let players =
-  [];
 
 let world = {
   width: 5200,
   height: 3400
 };
 
-let forest = {
-  trees: [],
-  bushes: [],
-  rocks: [],
-  flowers: [],
-  ponds: [],
-  paths: []
-};
 
-let serverFull =
-  false;
+let players =
+  [];
+
+
+let slimes =
+  [];
+
+
+let fireballs =
+  [];
+
 
 let keys =
   new Set();
 
-let joystickX =
-  0;
 
-let joystickY =
-  0;
+let joyX = 0;
+let joyY = 0;
 
-let joystickPointer =
+
+let joyPointer =
   null;
 
-// ======================================================
-// 화면
-// ======================================================
+
+let serverFull =
+  false;
+
+
+let fireballCooldown =
+  900;
+
+
+let lastLocalCast =
+  0;
+
+
+function clamp(
+  v,
+  min,
+  max
+) {
+
+  return Math.max(
+    min,
+    Math.min(
+      max,
+      v
+    )
+  );
+}
+
+
+// ==============================
+// 마법사 이미지
+// ==============================
+
+const mageImage =
+  new Image();
+
+
+let mageReady =
+  false;
+
+
+mageImage.onload =
+  () => {
+
+    mageReady =
+      true;
+
+  };
+
+
+mageImage.onerror =
+  () => {
+
+    statusEl.textContent =
+      'mage.png를 GitHub에 올려주세요';
+
+  };
+
+
+mageImage.src =
+  '/mage.png';
+
+
+// ==============================
+// 화면 크기
+// ==============================
 
 function resize() {
 
@@ -950,11 +1612,13 @@ function resize() {
       2
     );
 
+
   canvas.width =
     Math.floor(
       innerWidth *
       dpr
     );
+
 
   canvas.height =
     Math.floor(
@@ -962,13 +1626,16 @@ function resize() {
       dpr
     );
 
+
   canvas.style.width =
     innerWidth +
-    "px";
+    'px';
+
 
   canvas.style.height =
     innerHeight +
-    "px";
+    'px';
+
 
   ctx.setTransform(
     dpr,
@@ -979,228 +1646,243 @@ function resize() {
     0
   );
 
+
   ctx.imageSmoothingEnabled =
-    false;
+    true;
 }
 
+
 addEventListener(
-  "resize",
+  'resize',
   resize
 );
 
+
 resize();
 
-// ======================================================
+
+// ==============================
 // 서버
-// ======================================================
+// ==============================
 
 socket.on(
-  "connect",
+  'connect',
   () => {
 
-    if (!serverFull) {
+    if (
+      !serverFull
+    ) {
 
       statusEl.textContent =
-        "숲 서버 접속됨";
+        '숲 서버 접속됨';
+
     }
   }
 );
 
+
 socket.on(
-  "welcome",
+  'welcome',
   data => {
 
     myId =
       data.id;
 
+
     world =
       data.world;
 
-    forest =
-      data.forest;
+
+    fireballCooldown =
+      data.fireballCooldown;
+
 
     maxCountEl.textContent =
       data.maxPlayers;
-
-    selectAvatar(
-      "knight"
-    );
   }
 );
 
-socket.on(
-  "state",
-  data => {
-
-    players =
-      data;
-  }
-);
 
 socket.on(
-  "count",
+  'count',
   data => {
 
     countEl.textContent =
       data.current;
+
 
     maxCountEl.textContent =
       data.max;
   }
 );
 
+
 socket.on(
-  "serverFull",
+  'state',
+  data => {
+
+    players =
+      data.players;
+
+
+    slimes =
+      data.slimes;
+
+
+    fireballs =
+      data.fireballs;
+  }
+);
+
+
+socket.on(
+  'serverFull',
   data => {
 
     serverFull =
       true;
 
+
     statusEl.textContent =
-      "서버가 가득 찼습니다";
+      '서버가 가득 찼습니다';
+
 
     countEl.textContent =
       data.maxPlayers;
 
+
     maxCountEl.textContent =
       data.maxPlayers;
 
+
     joystick.style.display =
-      "none";
+      'none';
+
+
+    skillE.style.display =
+      'none';
+
 
     socket.io.opts.reconnection =
       false;
   }
 );
 
+
 socket.on(
-  "disconnect",
+  'disconnect',
   () => {
 
-    if (!serverFull) {
+    if (
+      !serverFull
+    ) {
 
       statusEl.textContent =
-        "재접속 중...";
+        '재접속 중...';
+
     }
   }
 );
 
-// ======================================================
-// 캐릭터 선택
-// ======================================================
 
-function selectAvatar(
-  avatar
-) {
-
-  characterButtons.forEach(
-    button => {
-
-      button.classList.toggle(
-        "selected",
-
-        button.dataset.avatar ===
-        avatar
-      );
-    }
-  );
-
-  currentClassEl.textContent =
-    classNames[avatar];
-
-  socket.emit(
-    "setAvatar",
-    {
-      avatar
-    }
-  );
-}
-
-characterButtons.forEach(
-  button => {
-
-    button.addEventListener(
-      "click",
-      () => {
-
-        selectAvatar(
-          button.dataset.avatar
-        );
-      }
-    );
-  }
-);
-
-// ======================================================
+// ==============================
 // 키보드
-// ======================================================
+// ==============================
 
 addEventListener(
-  "keydown",
+  'keydown',
   e => {
 
     const key =
       e.key.toLowerCase();
 
+
     if (
       [
-        "w",
-        "a",
-        "s",
-        "d",
-        "arrowup",
-        "arrowdown",
-        "arrowleft",
-        "arrowright"
-      ].includes(key)
+        'w',
+        'a',
+        's',
+        'd',
+        'arrowup',
+        'arrowdown',
+        'arrowleft',
+        'arrowright'
+      ].includes(
+        key
+      )
     ) {
 
-      keys.add(key);
+      keys.add(
+        key
+      );
+
 
       e.preventDefault();
+    }
+
+
+    if (
+      key === 'e'
+    ) {
+
+      castFireball();
+
+      e.preventDefault();
+
     }
   }
 );
 
+
 addEventListener(
-  "keyup",
+  'keyup',
   e => {
 
     keys.delete(
       e.key.toLowerCase()
     );
+
   }
 );
 
-// ======================================================
-// 조이스틱
-// ======================================================
+
+// ==============================
+// 모바일 조이스틱
+// ==============================
 
 function moveJoystick(
-  x,
-  y
+  clientX,
+  clientY
 ) {
 
   const rect =
     joystick.getBoundingClientRect();
 
-  const cx =
+
+  const centerX =
     rect.left +
     rect.width / 2;
 
-  const cy =
+
+  const centerY =
     rect.top +
     rect.height / 2;
 
+
   let dx =
-    x - cx;
+    clientX -
+    centerX;
+
 
   let dy =
-    y - cy;
+    clientY -
+    centerY;
+
 
   const max =
     rect.width *
-    0.34;
+    .34;
+
 
   const length =
     Math.hypot(
@@ -1208,12 +1890,16 @@ function moveJoystick(
       dy
     );
 
-  if (length > max) {
+
+  if (
+    length > max
+  ) {
 
     dx =
       dx /
       length *
       max;
+
 
     dy =
       dy /
@@ -1221,31 +1907,37 @@ function moveJoystick(
       max;
   }
 
-  joystickX =
+
+  joyX =
     dx / max;
 
-  joystickY =
+
+  joyY =
     dy / max;
 
+
   stick.style.transform =
-    "translate(" +
+    'translate(' +
     dx +
-    "px," +
+    'px,' +
     dy +
-    "px)";
+    'px)';
 }
 
+
 joystick.addEventListener(
-  "pointerdown",
+  'pointerdown',
   e => {
 
-    joystickPointer =
+    joyPointer =
       e.pointerId;
+
 
     joystick.setPointerCapture(
       e.pointerId
     );
 
+
     moveJoystick(
       e.clientX,
       e.clientY
@@ -1253,2016 +1945,279 @@ joystick.addEventListener(
   }
 );
 
+
 joystick.addEventListener(
-  "pointermove",
+  'pointermove',
   e => {
 
     if (
-      e.pointerId !==
-      joystickPointer
+      e.pointerId ===
+      joyPointer
     ) {
-      return;
-    }
 
-    moveJoystick(
-      e.clientX,
-      e.clientY
-    );
+      moveJoystick(
+        e.clientX,
+        e.clientY
+      );
+
+    }
   }
 );
 
-function releaseJoystick(
+
+function releaseJoy(
   e
 ) {
 
   if (
     e.pointerId !==
-    joystickPointer
+    joyPointer
   ) {
+
     return;
   }
 
-  joystickPointer =
+
+  joyPointer =
     null;
 
-  joystickX =
+
+  joyX =
     0;
 
-  joystickY =
+
+  joyY =
     0;
+
 
   stick.style.transform =
-    "translate(0px,0px)";
+    'translate(0px,0px)';
 }
 
-joystick.addEventListener(
-  "pointerup",
-  releaseJoystick
-);
 
 joystick.addEventListener(
-  "pointercancel",
-  releaseJoystick
+  'pointerup',
+  releaseJoy
 );
 
-// ======================================================
-// 입력 전송
-// ======================================================
 
-let previousInputX =
-  999;
+joystick.addEventListener(
+  'pointercancel',
+  releaseJoy
+);
 
-let previousInputY =
-  999;
 
-setInterval(() => {
+// ==============================
+// 파이어볼 발사
+// ==============================
 
-  if (serverFull)
+function castFireball() {
+
+  if (
+    serverFull
+  ) {
+
     return;
-
-  let x = 0;
-  let y = 0;
-
-  if (
-    keys.has("a") ||
-    keys.has("arrowleft")
-  ) {
-    x -= 1;
   }
 
-  if (
-    keys.has("d") ||
-    keys.has("arrowright")
-  ) {
-    x += 1;
-  }
+
+  const now =
+    performance.now();
+
 
   if (
-    keys.has("w") ||
-    keys.has("arrowup")
-  ) {
-    y -= 1;
-  }
-
-  if (
-    keys.has("s") ||
-    keys.has("arrowdown")
-  ) {
-    y += 1;
-  }
-
-  if (
-    Math.abs(
-      joystickX
-    ) > 0.08 ||
-
-    Math.abs(
-      joystickY
-    ) > 0.08
+    now -
+    lastLocalCast <
+    fireballCooldown
   ) {
 
-    x =
-      joystickX;
-
-    y =
-      joystickY;
+    return;
   }
 
-  const length =
-    Math.hypot(
-      x,
-      y
-    );
 
-  if (length > 1) {
+  lastLocalCast =
+    now;
 
-    x /= length;
-    y /= length;
+
+  socket.emit(
+    'castFireball'
+  );
+
+
+  skillE.classList.add(
+    'cooling'
+  );
+
+
+  skillE.textContent =
+    '쿨타임';
+
+
+  setTimeout(
+    () => {
+
+      skillE.classList.remove(
+        'cooling'
+      );
+
+
+      skillE.innerHTML =
+        'E<br>파이어볼';
+
+    },
+
+    fireballCooldown
+  );
+}
+
+
+skillE.addEventListener(
+  'pointerdown',
+  e => {
+
+    e.preventDefault();
+
+    castFireball();
+
   }
+);
 
-  if (
-    Math.abs(
-      x -
-      previousInputX
-    ) > 0.01 ||
 
-    Math.abs(
-      y -
-      previousInputY
-    ) > 0.01
-  ) {
+// ==============================
+// 이동 입력
+// ==============================
 
-    socket.emit(
-      "input",
-      {
+let lastX = 999;
+let lastY = 999;
+
+
+setInterval(
+  () => {
+
+    if (
+      serverFull
+    ) {
+
+      return;
+    }
+
+
+    let x = 0;
+    let y = 0;
+
+
+    if (
+      keys.has('a') ||
+      keys.has('arrowleft')
+    ) {
+
+      x--;
+
+    }
+
+
+    if (
+      keys.has('d') ||
+      keys.has('arrowright')
+    ) {
+
+      x++;
+
+    }
+
+
+    if (
+      keys.has('w') ||
+      keys.has('arrowup')
+    ) {
+
+      y--;
+
+    }
+
+
+    if (
+      keys.has('s') ||
+      keys.has('arrowdown')
+    ) {
+
+      y++;
+
+    }
+
+
+    if (
+      Math.abs(joyX) > .08 ||
+      Math.abs(joyY) > .08
+    ) {
+
+      x =
+        joyX;
+
+
+      y =
+        joyY;
+    }
+
+
+    const length =
+      Math.hypot(
         x,
         y
-      }
-    );
-
-    previousInputX =
-      x;
-
-    previousInputY =
-      y;
-  }
-
-}, 33);
-
-// ======================================================
-// 픽셀 그리기
-// ======================================================
-
-function px(
-  x,
-  y,
-  w,
-  h,
-  color
-) {
-
-  ctx.fillStyle =
-    color;
-
-  ctx.fillRect(
-    Math.round(x),
-    Math.round(y),
-    Math.round(w),
-    Math.round(h)
-  );
-}
-
-function ellipse(
-  x,
-  y,
-  rx,
-  ry,
-  color
-) {
-
-  ctx.beginPath();
-
-  ctx.ellipse(
-    x,
-    y,
-    rx,
-    ry,
-    0,
-    0,
-    Math.PI * 2
-  );
-
-  ctx.fillStyle =
-    color;
-
-  ctx.fill();
-}
-
-// ======================================================
-// 걷기 애니메이션
-// ======================================================
-
-function getWalkFrame(
-  player
-) {
-
-  if (!player.moving)
-    return 1;
-
-  return (
-    Math.floor(
-      performance.now() /
-      130
-    ) % 3
-  );
-}
-
-function getWalkOffsets(
-  frame
-) {
-
-  if (frame === 0) {
-
-    return {
-      leftLeg: -3,
-      rightLeg: 3,
-      leftArm: 3,
-      rightArm: -3,
-      bob: 1
-    };
-  }
-
-  if (frame === 2) {
-
-    return {
-      leftLeg: 3,
-      rightLeg: -3,
-      leftArm: -3,
-      rightArm: 3,
-      bob: 1
-    };
-  }
-
-  return {
-    leftLeg: 0,
-    rightLeg: 0,
-    leftArm: 0,
-    rightArm: 0,
-    bob: 0
-  };
-}
-
-// ======================================================
-// 그림자
-// ======================================================
-
-function drawShadow() {
-
-  ellipse(
-    0,
-    24,
-    18,
-    7,
-    "rgba(0,0,0,.28)"
-  );
-}
-
-// ======================================================
-// 기사
-// ======================================================
-
-function drawKnight(
-  direction,
-  frame
-) {
-
-  const walk =
-    getWalkOffsets(
-      frame
-    );
-
-  drawShadow();
-
-  ctx.save();
-
-  ctx.translate(
-    0,
-    -walk.bob
-  );
-
-  // 뒤
-  if (
-    direction ===
-    "back"
-  ) {
-
-    // 다리
-    px(
-      -9 +
-      walk.leftLeg,
-      12,
-      7,
-      14,
-      "#343c47"
-    );
-
-    px(
-      2 +
-      walk.rightLeg,
-      12,
-      7,
-      14,
-      "#343c47"
-    );
-
-    // 망토
-    px(
-      -13,
-      -9,
-      26,
-      24,
-      "#25548b"
-    );
-
-    px(
-      -10,
-      11,
-      20,
-      8,
-      "#173b69"
-    );
-
-    // 금색 장식
-    px(
-      -10,
-      -7,
-      20,
-      3,
-      "#d5a74f"
-    );
-
-    // 갑옷 어깨
-    px(
-      -16,
-      -8,
-      7,
-      8,
-      "#c8d1dc"
-    );
-
-    px(
-      9,
-      -8,
-      7,
-      8,
-      "#c8d1dc"
-    );
-
-    // 머리
-    ellipse(
-      0,
-      -20,
-      11,
-      11,
-      "#d6af90"
-    );
-
-    // 머리카락
-    ellipse(
-      0,
-      -25,
-      11,
-      8,
-      "#252833"
-    );
-
-    px(
-      -10,
-      -24,
-      20,
-      8,
-      "#252833"
-    );
-
-    // 검
-    px(
-      14,
-      -4,
-      4,
-      24,
-      "#adb9c6"
-    );
-
-    px(
-      12,
-      -3,
-      8,
-      4,
-      "#d5a74f"
-    );
-
-    return ctx.restore();
-  }
-
-  // 옆
-  if (
-    direction ===
-      "left" ||
-    direction ===
-      "right"
-  ) {
-
-    const flip =
-      direction ===
-      "left"
-        ? -1
-        : 1;
-
-    ctx.scale(
-      flip,
-      1
-    );
-
-    px(
-      -7 +
-      walk.leftLeg,
-      11,
-      7,
-      15,
-      "#343c47"
-    );
-
-    px(
-      2 +
-      walk.rightLeg,
-      13,
-      7,
-      13,
-      "#343c47"
-    );
-
-    px(
-      -10,
-      -9,
-      20,
-      24,
-      "#416fa8"
-    );
-
-    px(
-      -9,
-      -7,
-      18,
-      5,
-      "#bfcbd8"
-    );
-
-    px(
-      -7,
-      0,
-      14,
-      4,
-      "#d5a74f"
-    );
-
-    ellipse(
-      2,
-      -20,
-      10,
-      11,
-      "#d6af90"
-    );
-
-    ellipse(
-      0,
-      -25,
-      10,
-      7,
-      "#252833"
-    );
-
-    px(
-      -8,
-      -24,
-      16,
-      7,
-      "#252833"
-    );
-
-    // 눈
-    px(
-      7,
-      -21,
-      2,
-      2,
-      "#315d8d"
-    );
-
-    // 방패
-    px(
-      -17,
-      -5 +
-      walk.leftArm,
-      10,
-      18,
-      "#2e619a"
-    );
-
-    px(
-      -15,
-      -3 +
-      walk.leftArm,
-      6,
-      14,
-      "#d0a754"
-    );
-
-    // 검
-    px(
-      10,
-      -4 +
-      walk.rightArm,
-      4,
-      20,
-      "#cfd7df"
-    );
-
-    px(
-      8,
-      -4 +
-      walk.rightArm,
-      8,
-      4,
-      "#d0a754"
-    );
-
-    return ctx.restore();
-  }
-
-  // 앞
-
-  px(
-    -9 +
-    walk.leftLeg,
-    11,
-    7,
-    15,
-    "#343c47"
-  );
-
-  px(
-    2 +
-    walk.rightLeg,
-    11,
-    7,
-    15,
-    "#343c47"
-  );
-
-  // 몸통
-  px(
-    -12,
-    -9,
-    24,
-    23,
-    "#4979ad"
-  );
-
-  px(
-    -9,
-    -7,
-    18,
-    5,
-    "#c9d2dd"
-  );
-
-  px(
-    -2,
-    -5,
-    4,
-    18,
-    "#d0a754"
-  );
-
-  // 어깨갑옷
-  px(
-    -17,
-    -7 +
-    walk.leftArm,
-    7,
-    8,
-    "#c7d1dd"
-  );
-
-  px(
-    10,
-    -7 +
-    walk.rightArm,
-    7,
-    8,
-    "#c7d1dd"
-  );
-
-  // 얼굴
-  ellipse(
-    0,
-    -20,
-    11,
-    11,
-    "#dfb494"
-  );
-
-  // 머리
-  ellipse(
-    0,
-    -26,
-    10,
-    7,
-    "#252833"
-  );
-
-  px(
-    -10,
-    -25,
-    20,
-    8,
-    "#252833"
-  );
-
-  px(
-    -7,
-    -22,
-    4,
-    5,
-    "#252833"
-  );
-
-  px(
-    4,
-    -22,
-    5,
-    5,
-    "#252833"
-  );
-
-  // 눈
-  px(
-    -5,
-    -20,
-    2,
-    2,
-    "#448ad2"
-  );
-
-  px(
-    3,
-    -20,
-    2,
-    2,
-    "#448ad2"
-  );
-
-  // 방패
-  px(
-    -21,
-    -4 +
-    walk.leftArm,
-    10,
-    19,
-    "#315f99"
-  );
-
-  px(
-    -18,
-    -1 +
-    walk.leftArm,
-    4,
-    13,
-    "#d2ac55"
-  );
-
-  // 검
-  px(
-    15,
-    -5 +
-    walk.rightArm,
-    4,
-    22,
-    "#d7dde4"
-  );
-
-  px(
-    12,
-    -4 +
-    walk.rightArm,
-    10,
-    4,
-    "#d2ac55"
-  );
-
-  ctx.restore();
-}
-
-// ======================================================
-// 궁수
-// ======================================================
-
-function drawArcher(
-  direction,
-  frame
-) {
-
-  const walk =
-    getWalkOffsets(
-      frame
-    );
-
-  drawShadow();
-
-  ctx.save();
-
-  ctx.translate(
-    0,
-    -walk.bob
-  );
-
-  if (
-    direction ===
-    "back"
-  ) {
-
-    px(
-      -9 +
-      walk.leftLeg,
-      11,
-      7,
-      15,
-      "#4b3826"
-    );
-
-    px(
-      2 +
-      walk.rightLeg,
-      11,
-      7,
-      15,
-      "#4b3826"
-    );
-
-    // 망토
-    px(
-      -12,
-      -9,
-      24,
-      25,
-      "#355f38"
-    );
-
-    px(
-      -9,
-      11,
-      18,
-      7,
-      "#29492d"
-    );
-
-    // 화살통
-    px(
-      -15,
-      -9,
-      6,
-      25,
-      "#765331"
-    );
-
-    px(
-      -16,
-      -14,
-      2,
-      12,
-      "#d9c38a"
-    );
-
-    px(
-      -12,
-      -14,
-      2,
-      12,
-      "#d9c38a"
-    );
-
-    // 머리
-    ellipse(
-      0,
-      -20,
-      11,
-      11,
-      "#e0b792"
-    );
-
-    ellipse(
-      0,
-      -25,
-      11,
-      8,
-      "#9b704d"
-    );
-
-    // 포니테일
-    px(
-      7,
-      -21,
-      7,
-      17,
-      "#9b704d"
-    );
-
-    return ctx.restore();
-  }
-
-  if (
-    direction ===
-      "left" ||
-    direction ===
-      "right"
-  ) {
-
-    const flip =
-      direction ===
-      "left"
-        ? -1
-        : 1;
-
-    ctx.scale(
-      flip,
-      1
-    );
-
-    px(
-      -7 +
-      walk.leftLeg,
-      11,
-      7,
-      15,
-      "#4b3826"
-    );
-
-    px(
-      2 +
-      walk.rightLeg,
-      13,
-      7,
-      13,
-      "#4b3826"
-    );
-
-    px(
-      -10,
-      -9,
-      20,
-      23,
-      "#447447"
-    );
-
-    px(
-      -8,
-      -5,
-      16,
-      4,
-      "#91703f"
-    );
-
-    ellipse(
-      2,
-      -20,
-      10,
-      11,
-      "#e1b791"
-    );
-
-    ellipse(
-      0,
-      -25,
-      10,
-      7,
-      "#a37752"
-    );
-
-    px(
-      -7,
-      -24,
-      16,
-      7,
-      "#a37752"
-    );
-
-    px(
-      7,
-      -20,
-      2,
-      2,
-      "#467b4d"
-    );
-
-    // 포니테일
-    px(
-      -10,
-      -19,
-      7,
-      16,
-      "#a37752"
-    );
-
-    // 활
-    ctx.strokeStyle =
-      "#8f6137";
-
-    ctx.lineWidth =
-      3;
-
-    ctx.beginPath();
-
-    ctx.arc(
-      14,
-      1,
-      14,
-      -1.25,
-      1.25
-    );
-
-    ctx.stroke();
-
-    ctx.strokeStyle =
-      "#d6c39d";
-
-    ctx.lineWidth =
-      1;
-
-    ctx.beginPath();
-
-    ctx.moveTo(
-      18,
-      -12
-    );
-
-    ctx.lineTo(
-      18,
-      14
-    );
-
-    ctx.stroke();
-
-    return ctx.restore();
-  }
-
-  px(
-    -9 +
-    walk.leftLeg,
-    11,
-    7,
-    15,
-    "#4b3826"
-  );
-
-  px(
-    2 +
-    walk.rightLeg,
-    11,
-    7,
-    15,
-    "#4b3826"
-  );
-
-  px(
-    -12,
-    -9,
-    24,
-    23,
-    "#47784a"
-  );
-
-  px(
-    -10,
-    -5,
-    20,
-    4,
-    "#977345"
-  );
-
-  px(
-    -17,
-    -5 +
-    walk.leftArm,
-    7,
-    17,
-    "#355e39"
-  );
-
-  px(
-    10,
-    -5 +
-    walk.rightArm,
-    7,
-    17,
-    "#355e39"
-  );
-
-  ellipse(
-    0,
-    -20,
-    11,
-    11,
-    "#e4b995"
-  );
-
-  ellipse(
-    0,
-    -26,
-    10,
-    7,
-    "#a57750"
-  );
-
-  px(
-    -10,
-    -25,
-    20,
-    7,
-    "#a57750"
-  );
-
-  px(
-    7,
-    -22,
-    7,
-    16,
-    "#a57750"
-  );
-
-  px(
-    -5,
-    -20,
-    2,
-    2,
-    "#4f8b54"
-  );
-
-  px(
-    3,
-    -20,
-    2,
-    2,
-    "#4f8b54"
-  );
-
-  // 활
-  ctx.strokeStyle =
-    "#8d6037";
-
-  ctx.lineWidth =
-    3;
-
-  ctx.beginPath();
-
-  ctx.arc(
-    18,
-    0,
-    13,
-    -1.25,
-    1.25
-  );
-
-  ctx.stroke();
-
-  ctx.strokeStyle =
-    "#dacaa9";
-
-  ctx.lineWidth =
-    1;
-
-  ctx.beginPath();
-
-  ctx.moveTo(
-    22,
-    -12
-  );
-
-  ctx.lineTo(
-    22,
-    12
-  );
-
-  ctx.stroke();
-
-  ctx.restore();
-}
-
-// ======================================================
-// 마법사
-// ======================================================
-
-function drawMage(
-  direction,
-  frame
-) {
-
-  const walk =
-    getWalkOffsets(
-      frame
-    );
-
-  drawShadow();
-
-  ctx.save();
-
-  ctx.translate(
-    0,
-    -walk.bob
-  );
-
-  if (
-    direction ===
-    "back"
-  ) {
-
-    px(
-      -8 +
-      walk.leftLeg,
-      11,
-      7,
-      15,
-      "#402767"
-    );
-
-    px(
-      1 +
-      walk.rightLeg,
-      11,
-      7,
-      15,
-      "#402767"
-    );
-
-    // 로브
-    px(
-      -13,
-      -9,
-      26,
-      26,
-      "#56368c"
-    );
-
-    px(
-      -10,
-      10,
-      20,
-      9,
-      "#43266d"
-    );
-
-    px(
-      -10,
-      7,
-      20,
-      2,
-      "#d6a64f"
-    );
-
-    // 머리카락
-    ellipse(
-      0,
-      -19,
-      11,
-      12,
-      "#60458d"
-    );
-
-    px(
-      -9,
-      -19,
-      18,
-      15,
-      "#60458d"
-    );
-
-    // 모자
-    px(
-      -14,
-      -30,
-      28,
-      5,
-      "#42266f"
-    );
-
-    px(
-      -7,
-      -41,
-      14,
-      14,
-      "#56318c"
-    );
-
-    px(
-      -5,
-      -45,
-      9,
-      8,
-      "#56318c"
-    );
-
-    px(
-      -13,
-      -29,
-      26,
-      2,
-      "#d6a64f"
-    );
-
-    // 지팡이
-    px(
-      15,
-      -10,
-      4,
-      31,
-      "#745231"
-    );
-
-    ellipse(
-      17,
-      -15,
-      6,
-      6,
-      "#9d5cff"
-    );
-
-    ellipse(
-      17,
-      -15,
-      3,
-      3,
-      "#e4c5ff"
-    );
-
-    return ctx.restore();
-  }
-
-  if (
-    direction ===
-      "left" ||
-    direction ===
-      "right"
-  ) {
-
-    const flip =
-      direction ===
-      "left"
-        ? -1
-        : 1;
-
-    ctx.scale(
-      flip,
-      1
-    );
-
-    px(
-      -7 +
-      walk.leftLeg,
-      11,
-      7,
-      15,
-      "#402767"
-    );
-
-    px(
-      2 +
-      walk.rightLeg,
-      13,
-      7,
-      13,
-      "#402767"
-    );
-
-    px(
-      -10,
-      -9,
-      20,
-      25,
-      "#62419b"
-    );
-
-    px(
-      -8,
-      8,
-      16,
-      2,
-      "#d6a64f"
-    );
-
-    ellipse(
-      2,
-      -20,
-      10,
-      11,
-      "#e3b99b"
-    );
-
-    px(
-      -7,
-      -23,
-      14,
-      11,
-      "#60458d"
-    );
-
-    px(
-      -14,
-      -30,
-      28,
-      4,
-      "#42266f"
-    );
-
-    px(
-      -5,
-      -41,
-      12,
-      13,
-      "#56318c"
-    );
-
-    px(
-      -12,
-      -29,
-      24,
-      2,
-      "#d6a64f"
-    );
-
-    px(
-      7,
-      -21,
-      2,
-      2,
-      "#6645a2"
-    );
-
-    // 지팡이
-    px(
-      15,
-      -8,
-      4,
-      29,
-      "#745231"
-    );
-
-    ellipse(
-      17,
-      -13,
-      6,
-      6,
-      "#9d5cff"
-    );
-
-    ellipse(
-      17,
-      -13,
-      3,
-      3,
-      "#ead6ff"
-    );
-
-    return ctx.restore();
-  }
-
-  px(
-    -8 +
-    walk.leftLeg,
-    11,
-    7,
-    15,
-    "#402767"
-  );
-
-  px(
-    1 +
-    walk.rightLeg,
-    11,
-    7,
-    15,
-    "#402767"
-  );
-
-  px(
-    -13,
-    -9,
-    26,
-    26,
-    "#63429b"
-  );
-
-  px(
-    -10,
-    7,
-    20,
-    3,
-    "#d6a64f"
-  );
-
-  px(
-    -17,
-    -5 +
-    walk.leftArm,
-    7,
-    16,
-    "#50327f"
-  );
-
-  px(
-    10,
-    -5 +
-    walk.rightArm,
-    7,
-    16,
-    "#50327f"
-  );
-
-  ellipse(
-    0,
-    -20,
-    11,
-    11,
-    "#e5bb9b"
-  );
-
-  px(
-    -9,
-    -22,
-    18,
-    10,
-    "#60458d"
-  );
-
-  px(
-    -5,
-    -20,
-    2,
-    2,
-    "#865ee2"
-  );
-
-  px(
-    3,
-    -20,
-    2,
-    2,
-    "#865ee2"
-  );
-
-  // 마법모자
-  px(
-    -14,
-    -30,
-    28,
-    5,
-    "#44286f"
-  );
-
-  px(
-    -7,
-    -41,
-    14,
-    13,
-    "#59338f"
-  );
-
-  px(
-    -5,
-    -45,
-    9,
-    8,
-    "#59338f"
-  );
-
-  px(
-    -13,
-    -29,
-    26,
-    2,
-    "#d6a64f"
-  );
-
-  // 지팡이
-  px(
-    16,
-    -8 +
-    walk.rightArm,
-    4,
-    29,
-    "#745231"
-  );
-
-  ellipse(
-    18,
-    -13 +
-    walk.rightArm,
-    6,
-    6,
-    "#9f60ff"
-  );
-
-  ellipse(
-    18,
-    -13 +
-    walk.rightArm,
-    3,
-    3,
-    "#f2e6ff"
-  );
-
-  ctx.restore();
-}
-
-// ======================================================
-// 도적
-// ======================================================
-
-function drawRogue(
-  direction,
-  frame
-) {
-
-  const walk =
-    getWalkOffsets(
-      frame
-    );
-
-  drawShadow();
-
-  ctx.save();
-
-  ctx.translate(
-    0,
-    -walk.bob
-  );
-
-  if (
-    direction ===
-    "back"
-  ) {
-
-    px(
-      -9 +
-      walk.leftLeg,
-      11,
-      7,
-      15,
-      "#272a30"
-    );
-
-    px(
-      2 +
-      walk.rightLeg,
-      11,
-      7,
-      15,
-      "#272a30"
-    );
-
-    // 갑옷
-    px(
-      -12,
-      -9,
-      24,
-      24,
-      "#353a43"
-    );
-
-    // 붉은 망토
-    px(
-      -11,
-      -8,
-      22,
-      8,
-      "#8f2929"
-    );
-
-    px(
-      -8,
-      -1,
-      16,
-      15,
-      "#691f24"
-    );
-
-    ellipse(
-      0,
-      -20,
-      11,
-      11,
-      "#d8ad8e"
-    );
-
-    ellipse(
-      0,
-      -26,
-      11,
-      8,
-      "#252631"
-    );
-
-    px(
-      -10,
-      -25,
-      20,
-      8,
-      "#252631"
-    );
-
-    // 단검 2개
-    px(
-      -17,
-      -1,
-      4,
-      20,
-      "#abb7c3"
-    );
-
-    px(
-      13,
-      -1,
-      4,
-      20,
-      "#abb7c3"
-    );
-
-    return ctx.restore();
-  }
-
-  if (
-    direction ===
-      "left" ||
-    direction ===
-      "right"
-  ) {
-
-    const flip =
-      direction ===
-      "left"
-        ? -1
-        : 1;
-
-    ctx.scale(
-      flip,
-      1
-    );
-
-    px(
-      -7 +
-      walk.leftLeg,
-      11,
-      7,
-      15,
-      "#272a30"
-    );
-
-    px(
-      2 +
-      walk.rightLeg,
-      13,
-      7,
-      13,
-      "#272a30"
-    );
-
-    px(
-      -10,
-      -9,
-      20,
-      23,
-      "#393e47"
-    );
-
-    // 스카프
-    px(
-      -9,
-      -10,
-      18,
-      5,
-      "#9d3030"
-    );
-
-    px(
-      -12,
-      -7,
-      8,
-      13,
-      "#7c2428"
-    );
-
-    ellipse(
-      2,
-      -20,
-      10,
-      11,
-      "#dfb291"
-    );
-
-    ellipse(
-      0,
-      -26,
-      10,
-      7,
-      "#252631"
-    );
-
-    px(
-      -8,
-      -24,
-      17,
-      7,
-      "#252631"
-    );
-
-    px(
-      7,
-      -21,
-      2,
-      2,
-      "#a43e3e"
-    );
-
-    // 단검
-    px(
-      11,
-      -3 +
-      walk.rightArm,
-      14,
-      3,
-      "#d2dae2"
-    );
-
-    px(
-      9,
-      -5 +
-      walk.rightArm,
-      5,
-      7,
-      "#8a5838"
-    );
-
-    return ctx.restore();
-  }
-
-  px(
-    -9 +
-    walk.leftLeg,
-    11,
-    7,
-    15,
-    "#272a30"
-  );
-
-  px(
-    2 +
-    walk.rightLeg,
-    11,
-    7,
-    15,
-    "#272a30"
-  );
-
-  px(
-    -12,
-    -9,
-    24,
-    23,
-    "#3a3f48"
-  );
-
-  // 가죽띠
-  px(
-    -9,
-    2,
-    18,
-    4,
-    "#68482f"
-  );
-
-  // 스카프
-  px(
-    -11,
-    -11,
-    22,
-    6,
-    "#a83232"
-  );
-
-  px(
-    -13,
-    -7,
-    7,
-    13,
-    "#842729"
-  );
-
-  ellipse(
-    0,
-    -20,
-    11,
-    11,
-    "#deb291"
-  );
-
-  ellipse(
-    0,
-    -26,
-    11,
-    8,
-    "#252631"
-  );
-
-  px(
-    -10,
-    -25,
-    20,
-    8,
-    "#252631"
-  );
-
-  px(
-    -5,
-    -20,
-    2,
-    2,
-    "#b23a3a"
-  );
-
-  px(
-    3,
-    -20,
-    2,
-    2,
-    "#b23a3a"
-  );
-
-  // 왼쪽 단검
-  px(
-    -24,
-    -3 +
-    walk.leftArm,
-    14,
-    3,
-    "#d0d8df"
-  );
-
-  px(
-    -13,
-    -5 +
-    walk.leftArm,
-    5,
-    7,
-    "#744932"
-  );
-
-  // 오른쪽 단검
-  px(
-    10,
-    -3 +
-    walk.rightArm,
-    14,
-    3,
-    "#d0d8df"
-  );
-
-  px(
-    8,
-    -5 +
-    walk.rightArm,
-    5,
-    7,
-    "#744932"
-  );
-
-  ctx.restore();
-}
-
-// ======================================================
-// 캐릭터 렌더
-// ======================================================
-
-function drawCharacter(
-  player,
-  screenX,
-  screenY,
-  isMe
-) {
-
-  const frame =
-    getWalkFrame(
-      player
-    );
-
-  ctx.save();
-
-  ctx.translate(
-    Math.round(
-      screenX
-    ),
-
-    Math.round(
-      screenY
-    )
-  );
-
-  const scale =
-    1.35;
-
-  ctx.scale(
-    scale,
-    scale
-  );
-
-  switch (
-    player.avatar
-  ) {
-
-    case "archer":
-
-      drawArcher(
-        player.direction,
-        frame
       );
 
-      break;
 
-    case "mage":
+    if (
+      length > 1
+    ) {
 
-      drawMage(
-        player.direction,
-        frame
+      x /=
+        length;
+
+      y /=
+        length;
+
+    }
+
+
+    if (
+      Math.abs(
+        x -
+        lastX
+      ) > .01 ||
+
+      Math.abs(
+        y -
+        lastY
+      ) > .01
+    ) {
+
+      socket.emit(
+        'input',
+        {
+          x,
+          y
+        }
       );
 
-      break;
 
-    case "rogue":
+      lastX =
+        x;
 
-      drawRogue(
-        player.direction,
-        frame
-      );
 
-      break;
+      lastY =
+        y;
+    }
 
-    default:
+  },
 
-      drawKnight(
-        player.direction,
-        frame
-      );
-  }
+  33
+);
 
-  ctx.restore();
 
-  // 이름
-  ctx.font =
-    "700 12px system-ui";
-
-  ctx.textAlign =
-    "center";
-
-  ctx.fillStyle =
-    "rgba(0,0,0,.55)";
-
-  ctx.fillRect(
-    screenX - 34,
-    screenY - 58,
-    68,
-    18
-  );
-
-  ctx.fillStyle =
-    isMe
-      ? "#ffe082"
-      : "#ffffff";
-
-  ctx.fillText(
-    isMe
-      ? "YOU"
-      : "P-" +
-        player.id.slice(
-          0,
-          4
-        ),
-
-    screenX,
-
-    screenY - 45
-  );
-}
-
-// ======================================================
-// 숲 렌더
-// ======================================================
+// ==============================
+// 숲
+// ==============================
 
 function visible(
   x,
@@ -3273,34 +2228,54 @@ function visible(
 ) {
 
   return (
+
     x >
-      cameraX -
-      margin &&
+    cameraX -
+    margin &&
 
     x <
-      cameraX +
-      innerWidth +
-      margin &&
+    cameraX +
+    innerWidth +
+    margin &&
 
     y >
-      cameraY -
-      margin &&
+    cameraY -
+    margin &&
 
     y <
-      cameraY +
-      innerHeight +
-      margin
+    cameraY +
+    innerHeight +
+    margin
+
   );
 }
+
+
+function hashRand(n) {
+
+  const x =
+    Math.sin(
+      n *
+      12.9898
+    ) *
+    43758.5453;
+
+
+  return x -
+    Math.floor(
+      x
+    );
+}
+
 
 function drawForest(
   cameraX,
   cameraY
 ) {
 
-  // 잔디
   ctx.fillStyle =
-    "#396332";
+    '#3d6b34';
+
 
   ctx.fillRect(
     0,
@@ -3309,327 +2284,959 @@ function drawForest(
     innerHeight
   );
 
-  // 길
-  for (
-    const path
-    of forest.paths
-  ) {
 
-    ctx.fillStyle =
-      "#92754d";
+  // 흙길
+  ctx.fillStyle =
+    '#98764c';
 
-    ctx.fillRect(
-      path.x -
-      cameraX,
 
-      path.y -
-      cameraY,
+  ctx.fillRect(
+    -cameraX,
+    1580 -
+    cameraY,
+    world.width,
+    105
+  );
 
-      path.w,
-      path.h
-    );
-  }
 
-  // 꽃
-  for (
-    const flower
-    of forest.flowers
-  ) {
+  ctx.fillRect(
+    2510 -
+    cameraX,
+    -cameraY,
+    110,
+    world.height
+  );
 
-    if (
-      !visible(
-        flower.x,
-        flower.y,
-        20,
-        cameraX,
-        cameraY
-      )
-    ) {
-      continue;
-    }
-
-    ellipse(
-      flower.x -
-      cameraX,
-
-      flower.y -
-      cameraY,
-
-      2.5,
-      2.5,
-
-      flower.color
-    );
-  }
-
-  // 연못
-  for (
-    const pond
-    of forest.ponds
-  ) {
-
-    if (
-      !visible(
-        pond.x,
-        pond.y,
-        180,
-        cameraX,
-        cameraY
-      )
-    ) {
-      continue;
-    }
-
-    ellipse(
-      pond.x -
-      cameraX,
-
-      pond.y -
-      cameraY,
-
-      pond.rx,
-      pond.ry,
-
-      "#418daf"
-    );
-
-    ellipse(
-      pond.x -
-      cameraX -
-      12,
-
-      pond.y -
-      cameraY -
-      10,
-
-      pond.rx *
-      .55,
-
-      pond.ry *
-      .35,
-
-      "rgba(255,255,255,.13)"
-    );
-  }
-
-  // 바위
-  for (
-    const rock
-    of forest.rocks
-  ) {
-
-    if (
-      !visible(
-        rock.x,
-        rock.y,
-        60,
-        cameraX,
-        cameraY
-      )
-    ) {
-      continue;
-    }
-
-    ellipse(
-      rock.x -
-      cameraX,
-
-      rock.y -
-      cameraY,
-
-      rock.size,
-      rock.size *
-      .65,
-
-      "#757b75"
-    );
-
-    ellipse(
-      rock.x -
-      cameraX -
-      4,
-
-      rock.y -
-      cameraY -
-      4,
-
-      rock.size *
-      .45,
-
-      rock.size *
-      .25,
-
-      "#949a94"
-    );
-  }
-
-  // 덤불
-  for (
-    const bush
-    of forest.bushes
-  ) {
-
-    if (
-      !visible(
-        bush.x,
-        bush.y,
-        60,
-        cameraX,
-        cameraY
-      )
-    ) {
-      continue;
-    }
-
-    ellipse(
-      bush.x -
-      cameraX -
-      8,
-
-      bush.y -
-      cameraY,
-
-      bush.size,
-      bush.size *
-      .75,
-
-      "#267338"
-    );
-
-    ellipse(
-      bush.x -
-      cameraX +
-      7,
-
-      bush.y -
-      cameraY -
-      3,
-
-      bush.size,
-      bush.size *
-      .8,
-
-      "#308b44"
-    );
-  }
 
   // 나무
   for (
-    const tree
-    of forest.trees
+    let i = 0;
+    i < 150;
+    i++
   ) {
+
+    const x =
+      90 +
+      hashRand(
+        i + 1
+      ) *
+      (
+        world.width -
+        180
+      );
+
+
+    const y =
+      90 +
+      hashRand(
+        i + 701
+      ) *
+      (
+        world.height -
+        180
+      );
+
+
+    const size =
+      22 +
+      hashRand(
+        i + 1401
+      ) *
+      24;
+
 
     if (
       !visible(
-        tree.x,
-        tree.y,
+        x,
+        y,
         90,
         cameraX,
         cameraY
       )
     ) {
+
       continue;
     }
 
-    const x =
-      tree.x -
+
+    const screenX =
+      x -
       cameraX;
 
-    const y =
-      tree.y -
+
+    const screenY =
+      y -
       cameraY;
 
+
     // 그림자
-    ellipse(
-      x,
-      y + 28,
-      tree.size *
-      .75,
-      tree.size *
-      .28,
-      "rgba(0,0,0,.22)"
+    ctx.beginPath();
+
+
+    ctx.ellipse(
+      screenX,
+      screenY + 25,
+      size * .72,
+      size * .25,
+      0,
+      0,
+      Math.PI * 2
     );
+
+
+    ctx.fillStyle =
+      'rgba(0,0,0,.2)';
+
+
+    ctx.fill();
+
 
     // 줄기
-    px(
-      x -
-      tree.size *
-      .13,
+    ctx.fillStyle =
+      '#694526';
 
-      y,
 
-      tree.size *
-      .26,
-
-      tree.size *
-      .9,
-
-      "#684525"
+    ctx.fillRect(
+      screenX -
+      size * .12,
+      screenY,
+      size * .24,
+      size * .85
     );
+
 
     // 잎
-    ellipse(
-      x,
-      y - 8,
-      tree.size,
-      tree.size *
-      .85,
-      "#24733a"
+    ctx.beginPath();
+
+
+    ctx.arc(
+      screenX,
+      screenY - 8,
+      size,
+      0,
+      Math.PI * 2
     );
 
-    ellipse(
+
+    ctx.arc(
+      screenX -
+      size * .55,
+      screenY,
+      size * .58,
+      0,
+      Math.PI * 2
+    );
+
+
+    ctx.arc(
+      screenX +
+      size * .55,
+      screenY,
+      size * .58,
+      0,
+      Math.PI * 2
+    );
+
+
+    ctx.fillStyle =
+      '#287a3e';
+
+
+    ctx.fill();
+
+
+    ctx.beginPath();
+
+
+    ctx.arc(
+      screenX -
+      size * .25,
+      screenY -
+      size * .28,
+      size * .3,
+      0,
+      Math.PI * 2
+    );
+
+
+    ctx.fillStyle =
+      '#47a457';
+
+
+    ctx.fill();
+  }
+
+
+  // 꽃
+  for (
+    let i = 0;
+    i < 180;
+    i++
+  ) {
+
+    const x =
+      hashRand(
+        i + 2701
+      ) *
+      world.width;
+
+
+    const y =
+      hashRand(
+        i + 3301
+      ) *
+      world.height;
+
+
+    if (
+      !visible(
+        x,
+        y,
+        15,
+        cameraX,
+        cameraY
+      )
+    ) {
+
+      continue;
+    }
+
+
+    ctx.beginPath();
+
+
+    ctx.arc(
       x -
-      tree.size *
-      .55,
-
-      y,
-      tree.size *
-      .60,
-      tree.size *
-      .55,
-      "#2d8744"
-    );
-
-    ellipse(
-      x +
-      tree.size *
-      .55,
-
-      y,
-      tree.size *
-      .60,
-      tree.size *
-      .55,
-      "#2d8744"
-    );
-
-    ellipse(
-      x -
-      tree.size *
-      .25,
-
+      cameraX,
       y -
-      tree.size *
-      .32,
+      cameraY,
+      2.2,
+      0,
+      Math.PI * 2
+    );
 
-      tree.size *
-      .35,
-      tree.size *
-      .28,
-      "#4aa65b"
+
+    ctx.fillStyle =
+      [
+        '#ffe082',
+        '#ff9e9e',
+        '#c9a3ff',
+        '#9ee7ff'
+      ][
+        i % 4
+      ];
+
+
+    ctx.fill();
+  }
+
+
+  ctx.strokeStyle =
+    'rgba(255,255,255,.25)';
+
+
+  ctx.lineWidth =
+    4;
+
+
+  ctx.strokeRect(
+    -cameraX,
+    -cameraY,
+    world.width,
+    world.height
+  );
+}
+
+
+// ==============================
+// 마법사 스프라이트
+// ==============================
+
+function walkFrame(
+  player
+) {
+
+  if (
+    !player.moving
+  ) {
+
+    return 1;
+
+  }
+
+
+  return (
+    Math.floor(
+      performance.now() /
+      140
+    ) %
+    3
+  );
+}
+
+
+function directionRow(
+  direction
+) {
+
+  // 이미지 행
+  // 0 = 앞
+  // 1 = 뒤
+  // 2 = 왼쪽
+  // 3 = 오른쪽
+
+  if (
+    direction === 'back'
+  ) {
+
+    return 1;
+
+  }
+
+
+  if (
+    direction === 'left'
+  ) {
+
+    return 2;
+
+  }
+
+
+  if (
+    direction === 'right'
+  ) {
+
+    return 3;
+
+  }
+
+
+  return 0;
+}
+
+
+function drawMage(
+  player,
+  screenX,
+  screenY,
+  isMe
+) {
+
+  ctx.save();
+
+
+  ctx.translate(
+    Math.round(
+      screenX
+    ),
+    Math.round(
+      screenY
+    )
+  );
+
+
+  // 그림자
+  ctx.beginPath();
+
+
+  ctx.ellipse(
+    0,
+    27,
+    23,
+    8,
+    0,
+    0,
+    Math.PI * 2
+  );
+
+
+  ctx.fillStyle =
+    'rgba(0,0,0,.24)';
+
+
+  ctx.fill();
+
+
+  if (
+    mageReady
+  ) {
+
+    const column =
+      walkFrame(
+        player
+      );
+
+
+    const row =
+      directionRow(
+        player.direction
+      );
+
+
+    const sourceWidth =
+      mageImage.width /
+      3;
+
+
+    const sourceHeight =
+      mageImage.height /
+      4;
+
+
+    const drawWidth =
+      108;
+
+
+    const drawHeight =
+      144;
+
+
+    ctx.drawImage(
+
+      mageImage,
+
+      column *
+      sourceWidth,
+
+      row *
+      sourceHeight,
+
+      sourceWidth,
+
+      sourceHeight,
+
+      -drawWidth /
+      2,
+
+      -drawHeight +
+      38,
+
+      drawWidth,
+
+      drawHeight
+
+    );
+
+  } else {
+
+    ctx.beginPath();
+
+
+    ctx.arc(
+      0,
+      0,
+      24,
+      0,
+      Math.PI * 2
+    );
+
+
+    ctx.fillStyle =
+      '#6743a5';
+
+
+    ctx.fill();
+
+
+    ctx.fillStyle =
+      '#f0d6ff';
+
+
+    ctx.font =
+      'bold 24px sans-serif';
+
+
+    ctx.textAlign =
+      'center';
+
+
+    ctx.fillText(
+      'M',
+      0,
+      8
+    );
+  }
+
+
+  if (
+    isMe
+  ) {
+
+    ctx.beginPath();
+
+
+    ctx.arc(
+      0,
+      0,
+      34,
+      0,
+      Math.PI * 2
+    );
+
+
+    ctx.strokeStyle =
+      'rgba(255,226,128,.75)';
+
+
+    ctx.lineWidth =
+      2;
+
+
+    ctx.stroke();
+  }
+
+
+  ctx.restore();
+
+
+  // 이름
+  ctx.fillStyle =
+    'rgba(0,0,0,.48)';
+
+
+  ctx.fillRect(
+    screenX - 33,
+    screenY - 65,
+    66,
+    18
+  );
+
+
+  ctx.fillStyle =
+    isMe
+      ? '#ffe082'
+      : '#ffffff';
+
+
+  ctx.font =
+    '700 12px system-ui';
+
+
+  ctx.textAlign =
+    'center';
+
+
+  ctx.fillText(
+
+    isMe
+      ? 'YOU'
+      : 'P-' +
+        player.id.slice(
+          0,
+          4
+        ),
+
+    screenX,
+
+    screenY - 52
+
+  );
+}
+
+
+// ==============================
+// 슬라임
+// ==============================
+
+function drawSlime(
+  slime,
+  cameraX,
+  cameraY
+) {
+
+  if (
+    !slime.alive
+  ) {
+
+    return;
+  }
+
+
+  const x =
+    slime.x -
+    cameraX;
+
+
+  const y =
+    slime.y -
+    cameraY;
+
+
+  const radius =
+    slime.elite
+      ? 34
+      : 24;
+
+
+  const bounce =
+    Math.sin(
+      performance.now() /
+      180 +
+      slime.id
+    ) *
+    2.5;
+
+
+  ctx.save();
+
+
+  ctx.translate(
+    x,
+    y +
+    bounce
+  );
+
+
+  // 그림자
+  ctx.beginPath();
+
+
+  ctx.ellipse(
+    0,
+    radius * .72,
+    radius * .82,
+    radius * .28,
+    0,
+    0,
+    Math.PI * 2
+  );
+
+
+  ctx.fillStyle =
+    'rgba(0,0,0,.22)';
+
+
+  ctx.fill();
+
+
+  // 몸
+  ctx.beginPath();
+
+
+  ctx.moveTo(
+    -radius,
+    8
+  );
+
+
+  ctx.quadraticCurveTo(
+    -radius,
+    -radius * .65,
+    0,
+    -radius
+  );
+
+
+  ctx.quadraticCurveTo(
+    radius,
+    -radius * .65,
+    radius,
+    8
+  );
+
+
+  ctx.quadraticCurveTo(
+    0,
+    radius * .85,
+    -radius,
+    8
+  );
+
+
+  ctx.fillStyle =
+    slime.elite
+      ? '#7d4fd1'
+      : '#58c96f';
+
+
+  ctx.fill();
+
+
+  // 반짝임
+  ctx.beginPath();
+
+
+  ctx.ellipse(
+    -radius * .3,
+    -radius * .25,
+    radius * .22,
+    radius * .13,
+    -.4,
+    0,
+    Math.PI * 2
+  );
+
+
+  ctx.fillStyle =
+    'rgba(255,255,255,.25)';
+
+
+  ctx.fill();
+
+
+  // 눈
+  ctx.fillStyle =
+    '#172019';
+
+
+  ctx.beginPath();
+
+
+  ctx.arc(
+    -radius * .3,
+    -2,
+    3,
+    0,
+    Math.PI * 2
+  );
+
+
+  ctx.arc(
+    radius * .3,
+    -2,
+    3,
+    0,
+    Math.PI * 2
+  );
+
+
+  ctx.fill();
+
+
+  // 엘리트 왕관
+  if (
+    slime.elite
+  ) {
+
+    ctx.fillStyle =
+      '#f6cf58';
+
+
+    ctx.beginPath();
+
+
+    ctx.moveTo(
+      -13,
+      -radius - 2
+    );
+
+
+    ctx.lineTo(
+      -8,
+      -radius - 13
+    );
+
+
+    ctx.lineTo(
+      0,
+      -radius - 5
+    );
+
+
+    ctx.lineTo(
+      8,
+      -radius - 13
+    );
+
+
+    ctx.lineTo(
+      13,
+      -radius - 2
+    );
+
+
+    ctx.closePath();
+
+
+    ctx.fill();
+  }
+
+
+  ctx.restore();
+
+
+  // 체력바
+  const width =
+    slime.elite
+      ? 68
+      : 48;
+
+
+  const hpPercent =
+    Math.max(
+      0,
+      slime.hp /
+      slime.maxHp
+    );
+
+
+  ctx.fillStyle =
+    'rgba(0,0,0,.55)';
+
+
+  ctx.fillRect(
+    x -
+    width / 2,
+    y -
+    radius -
+    22,
+    width,
+    7
+  );
+
+
+  ctx.fillStyle =
+    slime.elite
+      ? '#e5b84d'
+      : '#ef6666';
+
+
+  ctx.fillRect(
+    x -
+    width / 2 +
+    1,
+    y -
+    radius -
+    21,
+    (
+      width -
+      2
+    ) *
+    hpPercent,
+    5
+  );
+
+
+  if (
+    slime.elite
+  ) {
+
+    ctx.fillStyle =
+      '#ffe59a';
+
+
+    ctx.font =
+      '700 11px system-ui';
+
+
+    ctx.textAlign =
+      'center';
+
+
+    ctx.fillText(
+      'ELITE',
+      x,
+      y -
+      radius -
+      28
     );
   }
 }
 
-// ======================================================
-// 메인 렌더
-// ======================================================
+
+// ==============================
+// 파이어볼
+// ==============================
+
+function drawFireball(
+  fireball,
+  cameraX,
+  cameraY
+) {
+
+  const x =
+    fireball.x -
+    cameraX;
+
+
+  const y =
+    fireball.y -
+    cameraY;
+
+
+  ctx.save();
+
+
+  ctx.shadowBlur =
+    18;
+
+
+  ctx.shadowColor =
+    '#ff6a20';
+
+
+  ctx.beginPath();
+
+
+  ctx.arc(
+    x,
+    y,
+    16,
+    0,
+    Math.PI * 2
+  );
+
+
+  ctx.fillStyle =
+    'rgba(255,86,26,.35)';
+
+
+  ctx.fill();
+
+
+  ctx.beginPath();
+
+
+  ctx.arc(
+    x,
+    y,
+    10,
+    0,
+    Math.PI * 2
+  );
+
+
+  ctx.fillStyle =
+    '#ff6a1a';
+
+
+  ctx.fill();
+
+
+  ctx.beginPath();
+
+
+  ctx.arc(
+    x - 2,
+    y - 2,
+    5,
+    0,
+    Math.PI * 2
+  );
+
+
+  ctx.fillStyle =
+    '#ffd35a';
+
+
+  ctx.fill();
+
+
+  ctx.restore();
+}
+
+
+// ==============================
+// 렌더
+// ==============================
 
 function render() {
 
   requestAnimationFrame(
     render
   );
+
 
   ctx.clearRect(
     0,
@@ -3638,6 +3245,7 @@ function render() {
     innerHeight
   );
 
+
   const me =
     players.find(
       player =>
@@ -3645,104 +3253,152 @@ function render() {
         myId
     );
 
+
   let cameraX = 0;
   let cameraY = 0;
 
-  if (me) {
+
+  if (
+    me
+  ) {
 
     cameraX =
-      me.x -
-      innerWidth /
-      2;
+      clamp(
+        me.x -
+        innerWidth / 2,
 
-    cameraY =
-      me.y -
-      innerHeight /
-      2;
-
-    cameraX =
-      Math.max(
         0,
 
-        Math.min(
-          Math.max(
-            0,
-
-            world.width -
-            innerWidth
-          ),
-
-          cameraX
+        Math.max(
+          0,
+          world.width -
+          innerWidth
         )
       );
 
+
     cameraY =
-      Math.max(
+      clamp(
+        me.y -
+        innerHeight / 2,
+
         0,
 
-        Math.min(
-          Math.max(
-            0,
-
-            world.height -
-            innerHeight
-          ),
-
-          cameraY
+        Math.max(
+          0,
+          world.height -
+          innerHeight
         )
       );
   }
+
 
   drawForest(
     cameraX,
     cameraY
   );
 
-  // 플레이어는 Y순서로 그림
-  // 아래쪽 플레이어가 앞에 보임
 
-  const sortedPlayers =
+  // 슬라임
+  for (
+    const slime
+    of slimes
+  ) {
+
+    if (
+      visible(
+        slime.x,
+        slime.y,
+        80,
+        cameraX,
+        cameraY
+      )
+    ) {
+
+      drawSlime(
+        slime,
+        cameraX,
+        cameraY
+      );
+
+    }
+  }
+
+
+  // 파이어볼
+  for (
+    const fireball
+    of fireballs
+  ) {
+
+    if (
+      visible(
+        fireball.x,
+        fireball.y,
+        50,
+        cameraX,
+        cameraY
+      )
+    ) {
+
+      drawFireball(
+        fireball,
+        cameraX,
+        cameraY
+      );
+
+    }
+  }
+
+
+  // 플레이어
+  const ordered =
     [...players].sort(
-      (a, b) =>
-        a.y - b.y
+      (
+        a,
+        b
+      ) =>
+        a.y -
+        b.y
     );
+
 
   for (
     const player
-    of sortedPlayers
+    of ordered
   ) {
 
-    const screenX =
-      player.x -
-      cameraX;
-
-    const screenY =
-      player.y -
-      cameraY;
-
     if (
-      screenX < -100 ||
-      screenX >
-        innerWidth +
-        100 ||
-
-      screenY < -100 ||
-      screenY >
-        innerHeight +
-        100
+      !visible(
+        player.x,
+        player.y,
+        100,
+        cameraX,
+        cameraY
+      )
     ) {
+
       continue;
     }
 
-    drawCharacter(
+
+    drawMage(
+
       player,
-      screenX,
-      screenY,
+
+      player.x -
+      cameraX,
+
+      player.y -
+      cameraY,
+
       player.id ===
-        myId
+      myId
+
     );
   }
 }
+
 
 render();
 
@@ -3754,28 +3410,37 @@ render();
 
 `);
 
-});
+  }
+);
 
-// ======================================================
+
+// ==============================
 // 서버 실행
-// ======================================================
+// ==============================
 
 server.listen(
   PORT,
   () => {
 
     console.log(
-      "Forest RPG server running"
-    );
-
-    console.log(
-      "PORT:",
+      'Forest Mage RPG running on port ' +
       PORT
     );
 
+
     console.log(
-      "MAX PLAYERS:",
+      'Players: ' +
       MAX_PLAYERS
     );
+
+
+    console.log(
+      'Slimes: ' +
+      (
+        NORMAL_SLIMES +
+        ELITE_SLIMES
+      )
+    );
+
   }
 );
