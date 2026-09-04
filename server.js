@@ -8,19 +8,19 @@ const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 
+// ==============================
+// 게임 설정
+// ==============================
+
+// 기존보다 훨씬 넓은 맵
 const WORLD = {
-  width: 2000,
-  height: 1200
+  width: 5000,
+  height: 3000
 };
 
-const PLAYER_RADIUS = 22;
-const PLAYER_SPEED = 280;
+const PLAYER_RADIUS = 24;
+const PLAYER_SPEED = 320;
 const TICK_RATE = 30;
-
-// ==============================
-// 최대 서버 접속 인원
-// 여기 숫자만 바꾸면 됨
-// ==============================
 const MAX_PLAYERS = 20;
 
 const players = new Map();
@@ -32,21 +32,30 @@ function clamp(value, min, max) {
 function makePlayer(id) {
   return {
     id,
-    x: 120 + Math.random() * (WORLD.width - 240),
-    y: 120 + Math.random() * (WORLD.height - 240),
+
+    x:
+      300 +
+      Math.random() *
+        (WORLD.width - 600),
+
+    y:
+      300 +
+      Math.random() *
+        (WORLD.height - 600),
+
     inputX: 0,
-    inputY: 0
+    inputY: 0,
+
+    angle: 0
   };
 }
 
-
 // ==============================
-// 플레이어 접속
+// 접속
 // ==============================
 
 io.on('connection', (socket) => {
 
-  // 서버가 가득 찬 경우
   if (players.size >= MAX_PLAYERS) {
 
     socket.emit('serverFull', {
@@ -60,72 +69,77 @@ io.on('connection', (socket) => {
     return;
   }
 
+  const player =
+    makePlayer(socket.id);
 
-  // 플레이어 생성
   players.set(
     socket.id,
-    makePlayer(socket.id)
+    player
   );
 
-
-  // 접속 성공
   socket.emit('welcome', {
     id: socket.id,
     world: WORLD,
     maxPlayers: MAX_PLAYERS
   });
 
-
-  // 접속자 수 전송
   io.emit('count', {
     current: players.size,
     max: MAX_PLAYERS
   });
 
-
   // ==============================
-  // 플레이어 이동 입력
+  // 이동 입력
   // ==============================
 
   socket.on('input', (data = {}) => {
 
-    const player = players.get(socket.id);
+    const player =
+      players.get(socket.id);
 
     if (!player) return;
 
+    let x =
+      Number(data.x) || 0;
 
-    let x = Number(data.x) || 0;
-    let y = Number(data.y) || 0;
+    let y =
+      Number(data.y) || 0;
 
-
-    const length = Math.hypot(x, y);
-
+    const length =
+      Math.hypot(x, y);
 
     if (length > 1) {
-
       x /= length;
       y /= length;
-
     }
 
+    player.inputX =
+      clamp(x, -1, 1);
 
-    player.inputX = clamp(x, -1, 1);
-    player.inputY = clamp(y, -1, 1);
+    player.inputY =
+      clamp(y, -1, 1);
 
+    // 움직이는 방향으로 캐릭터 회전
+    if (
+      Math.abs(x) > 0.01 ||
+      Math.abs(y) > 0.01
+    ) {
+
+      player.angle =
+        Math.atan2(y, x);
+    }
   });
 
-
   // ==============================
-  // 플레이어 나가기
+  // 나가기
   // ==============================
 
   socket.on('disconnect', () => {
 
-    if (!players.has(socket.id)) return;
-
+    if (!players.has(socket.id))
+      return;
 
     players.delete(socket.id);
-
 
     io.emit('count', {
       current: players.size,
@@ -136,65 +150,66 @@ io.on('connection', (socket) => {
 
 });
 
-
 // ==============================
-// 게임 서버 업데이트
+// 게임 업데이트
 // ==============================
 
 let last = Date.now();
-
 
 setInterval(() => {
 
   const now = Date.now();
 
-  const dt = Math.min(
-    (now - last) / 1000,
-    0.1
-  );
+  const dt =
+    Math.min(
+      (now - last) / 1000,
+      0.1
+    );
 
   last = now;
 
-
-  for (const player of players.values()) {
+  for (
+    const player
+    of players.values()
+  ) {
 
     player.x +=
       player.inputX *
       PLAYER_SPEED *
       dt;
 
-
     player.y +=
       player.inputY *
       PLAYER_SPEED *
       dt;
 
+    player.x =
+      clamp(
+        player.x,
+        PLAYER_RADIUS,
+        WORLD.width -
+          PLAYER_RADIUS
+      );
 
-    player.x = clamp(
-      player.x,
-      PLAYER_RADIUS,
-      WORLD.width - PLAYER_RADIUS
-    );
-
-
-    player.y = clamp(
-      player.y,
-      PLAYER_RADIUS,
-      WORLD.height - PLAYER_RADIUS
-    );
+    player.y =
+      clamp(
+        player.y,
+        PLAYER_RADIUS,
+        WORLD.height -
+          PLAYER_RADIUS
+      );
 
   }
 
-
-  // 모든 플레이어 위치 전송
   io.emit(
     'state',
     Array.from(
       players.values(),
-      (player) => ({
+      player => ({
         id: player.id,
         x: player.x,
-        y: player.y
+        y: player.y,
+        angle: player.angle
       })
     )
   );
@@ -202,14 +217,13 @@ setInterval(() => {
 }, 1000 / TICK_RATE);
 
 
-
 // ==============================
-// 게임 화면
+// 웹 게임
 // ==============================
 
 app.get('/', (_req, res) => {
 
-  res.type('html').send(`
+res.type('html').send(`
 
 <!doctype html>
 
@@ -221,14 +235,15 @@ app.get('/', (_req, res) => {
 
 <meta
   name="viewport"
-  content="width=device-width,
-  initial-scale=1,
-  viewport-fit=cover,
-  user-scalable=no"
+  content="
+    width=device-width,
+    initial-scale=1,
+    viewport-fit=cover,
+    user-scalable=no
+  "
 >
 
-<title>Open Move</title>
-
+<title>Open Multiplayer</title>
 
 <style>
 
@@ -253,9 +268,7 @@ body {
     sans-serif;
 
   touch-action: none;
-
 }
-
 
 canvas {
 
@@ -263,11 +276,7 @@ canvas {
 
   width: 100%;
   height: 100%;
-
-  background: #172033;
-
 }
-
 
 #hud {
 
@@ -281,79 +290,70 @@ canvas {
   color: white;
 
   background:
-    rgba(0,0,0,.42);
+    rgba(0,0,0,.48);
 
   padding:
-    9px 12px;
+    10px 13px;
 
   border-radius: 12px;
 
   font-size: 14px;
 
-  line-height: 1.45;
+  line-height: 1.5;
 
   backdrop-filter:
     blur(6px);
-
 }
-
 
 #status {
-
   font-weight: 700;
-
 }
-
 
 #joystick {
 
   position: fixed;
 
-  left: 22px;
-  bottom: 22px;
+  left: 24px;
+  bottom: 24px;
 
-  width: 138px;
-  height: 138px;
+  width: 145px;
+  height: 145px;
 
   border-radius: 50%;
 
   border:
     2px solid
-    rgba(255,255,255,.35);
+    rgba(255,255,255,.38);
 
   background:
-    rgba(255,255,255,.09);
+    rgba(255,255,255,.10);
 
-  z-index: 11;
+  z-index: 20;
 
   touch-action: none;
-
 }
-
 
 #stick {
 
   position: absolute;
 
-  left: 44px;
-  top: 44px;
+  left: 47px;
+  top: 47px;
 
-  width: 50px;
-  height: 50px;
+  width: 51px;
+  height: 51px;
 
   border-radius: 50%;
 
   background:
-    rgba(255,255,255,.72);
+    rgba(255,255,255,.82);
 
   box-shadow:
-    0 4px 14px
-    rgba(0,0,0,.25);
+    0 5px 15px
+    rgba(0,0,0,.3);
 
   pointer-events: none;
-
 }
-
 
 #hint {
 
@@ -362,30 +362,24 @@ canvas {
   right: 12px;
   bottom: 12px;
 
-  z-index: 10;
-
   color:
-    rgba(255,255,255,.82);
+    rgba(255,255,255,.85);
 
   background:
-    rgba(0,0,0,.35);
+    rgba(0,0,0,.38);
 
   padding:
-    8px 10px;
+    8px 11px;
 
   border-radius: 10px;
 
   font-size: 12px;
-
 }
-
 
 @media (pointer: fine) {
 
   #joystick {
-
-    opacity: .35;
-
+    opacity: .4;
   }
 
 }
@@ -394,12 +388,9 @@ canvas {
 
 </head>
 
-
 <body>
 
-
 <canvas id="game"></canvas>
-
 
 <div id="hud">
 
@@ -415,92 +406,70 @@ canvas {
     명
   </div>
 
+  <div>
+    맵 크기:
+    5000 × 3000
+  </div>
+
 </div>
 
-
-<div
-  id="joystick"
-  aria-label="이동 조이스틱"
->
+<div id="joystick">
 
   <div id="stick"></div>
 
 </div>
 
-
 <div id="hint">
-
-  PC: WASD / 방향키
-  ·
-  모바일: 왼쪽 조이스틱
-
+PC: WASD / 방향키
+· 모바일: 조이스틱
 </div>
 
 
-
 <script src="/socket.io/socket.io.js"></script>
-
 
 <script>
 
 const socket = io();
 
-
 const canvas =
   document.getElementById('game');
-
 
 const ctx =
   canvas.getContext('2d');
 
-
 const statusEl =
   document.getElementById('status');
-
 
 const countEl =
   document.getElementById('count');
 
-
 const maxCountEl =
   document.getElementById('maxCount');
-
 
 const joystick =
   document.getElementById('joystick');
 
-
 const stick =
   document.getElementById('stick');
 
-
-
 let myId = null;
 
-
 let world = {
-  width: 2000,
-  height: 1200
+  width: 5000,
+  height: 3000
 };
 
-
 let players = [];
-
 
 let keys =
   new Set();
 
-
 let touchX = 0;
 let touchY = 0;
 
-
 let joystickPointer = null;
 
-
-// 서버가 꽉 찼는지
 let serverIsFull = false;
-
 
 
 // ==============================
@@ -515,26 +484,21 @@ function resize() {
       2
     );
 
-
   canvas.width =
     Math.floor(
       innerWidth * dpr
     );
-
 
   canvas.height =
     Math.floor(
       innerHeight * dpr
     );
 
-
   canvas.style.width =
     innerWidth + 'px';
 
-
   canvas.style.height =
     innerHeight + 'px';
-
 
   ctx.setTransform(
     dpr,
@@ -547,19 +511,16 @@ function resize() {
 
 }
 
-
 addEventListener(
   'resize',
   resize
 );
 
-
 resize();
 
 
-
 // ==============================
-// 서버 연결
+// 서버
 // ==============================
 
 socket.on('connect', () => {
@@ -573,15 +534,15 @@ socket.on('connect', () => {
 
 });
 
-
-
 socket.on(
   'welcome',
-  (data) => {
+  data => {
 
-    myId = data.id;
+    myId =
+      data.id;
 
-    world = data.world;
+    world =
+      data.world;
 
     maxCountEl.textContent =
       data.maxPlayers;
@@ -589,38 +550,28 @@ socket.on(
   }
 );
 
-
-
 socket.on(
   'serverFull',
-  (data) => {
+  data => {
 
     serverIsFull = true;
-
 
     statusEl.textContent =
       '서버가 가득 찼습니다';
 
-
     countEl.textContent =
       data.maxPlayers;
-
 
     maxCountEl.textContent =
       data.maxPlayers;
 
-
     joystick.style.display =
       'none';
 
-
     socket.io.opts.reconnection =
       false;
-
   }
 );
-
-
 
 socket.on(
   'disconnect',
@@ -631,37 +582,31 @@ socket.on(
       statusEl.textContent =
         '서버가 가득 찼습니다';
 
-      return;
+    } else {
+
+      statusEl.textContent =
+        '재접속 중...';
 
     }
-
-
-    statusEl.textContent =
-      '서버 연결 끊김 · 재접속 중...';
 
   }
 );
 
-
-
 socket.on(
   'state',
-  (state) => {
+  state => {
 
     players = state;
 
   }
 );
 
-
-
 socket.on(
   'count',
-  (data) => {
+  data => {
 
     countEl.textContent =
       data.current;
-
 
     maxCountEl.textContent =
       data.max;
@@ -670,18 +615,16 @@ socket.on(
 );
 
 
-
 // ==============================
-// PC 키보드 조작
+// PC 조작
 // ==============================
 
 addEventListener(
   'keydown',
-  (e) => {
+  e => {
 
     const key =
       e.key.toLowerCase();
-
 
     if (
       [
@@ -705,11 +648,9 @@ addEventListener(
   }
 );
 
-
-
 addEventListener(
   'keyup',
-  (e) => {
+  e => {
 
     keys.delete(
       e.key.toLowerCase()
@@ -717,7 +658,6 @@ addEventListener(
 
   }
 );
-
 
 
 // ==============================
@@ -732,52 +672,40 @@ function setJoystickFromPoint(
   const rect =
     joystick.getBoundingClientRect();
 
-
   const centerX =
     rect.left +
     rect.width / 2;
-
 
   const centerY =
     rect.top +
     rect.height / 2;
 
-
   let dx =
     clientX - centerX;
-
 
   let dy =
     clientY - centerY;
 
-
   const max =
     rect.width * 0.34;
 
-
   const length =
     Math.hypot(dx, dy);
-
 
   if (length > max) {
 
     dx =
       dx / length * max;
 
-
     dy =
       dy / length * max;
-
   }
-
 
   touchX =
     dx / max;
 
-
   touchY =
     dy / max;
-
 
   stick.style.transform =
     'translate(' +
@@ -785,37 +713,29 @@ function setJoystickFromPoint(
     'px,' +
     dy +
     'px)';
-
 }
-
-
 
 joystick.addEventListener(
   'pointerdown',
-  (e) => {
+  e => {
 
     joystickPointer =
       e.pointerId;
-
 
     joystick.setPointerCapture(
       e.pointerId
     );
 
-
     setJoystickFromPoint(
       e.clientX,
       e.clientY
     );
-
   }
 );
 
-
-
 joystick.addEventListener(
   'pointermove',
-  (e) => {
+  e => {
 
     if (
       e.pointerId ===
@@ -832,39 +752,26 @@ joystick.addEventListener(
   }
 );
 
-
-
 function releaseJoystick(e) {
 
   if (
     e.pointerId !==
     joystickPointer
-  ) {
-
-    return;
-
-  }
-
+  ) return;
 
   joystickPointer = null;
-
 
   touchX = 0;
   touchY = 0;
 
-
   stick.style.transform =
     'translate(0px,0px)';
-
 }
-
-
 
 joystick.addEventListener(
   'pointerup',
   releaseJoystick
 );
-
 
 joystick.addEventListener(
   'pointercancel',
@@ -872,63 +779,40 @@ joystick.addEventListener(
 );
 
 
-
 // ==============================
-// 이동 입력 서버로 보내기
+// 입력 전송
 // ==============================
 
 let lastSentX = 999;
 let lastSentY = 999;
 
-
 setInterval(() => {
 
-  if (serverIsFull) return;
-
+  if (serverIsFull)
+    return;
 
   let x = 0;
   let y = 0;
 
-
   if (
     keys.has('a') ||
     keys.has('arrowleft')
-  ) {
-
-    x -= 1;
-
-  }
-
+  ) x -= 1;
 
   if (
     keys.has('d') ||
     keys.has('arrowright')
-  ) {
-
-    x += 1;
-
-  }
-
+  ) x += 1;
 
   if (
     keys.has('w') ||
     keys.has('arrowup')
-  ) {
-
-    y -= 1;
-
-  }
-
+  ) y -= 1;
 
   if (
     keys.has('s') ||
     keys.has('arrowdown')
-  ) {
-
-    y += 1;
-
-  }
-
+  ) y += 1;
 
   if (
     Math.abs(touchX) > 0.08 ||
@@ -940,10 +824,8 @@ setInterval(() => {
 
   }
 
-
   const length =
     Math.hypot(x, y);
-
 
   if (length > 1) {
 
@@ -951,7 +833,6 @@ setInterval(() => {
     y /= length;
 
   }
-
 
   if (
     Math.abs(
@@ -971,18 +852,15 @@ setInterval(() => {
       }
     );
 
-
     lastSentX = x;
     lastSentY = y;
-
   }
 
 }, 33);
 
 
-
 // ==============================
-// 맵 격자
+// 배경
 // ==============================
 
 function drawGrid(
@@ -992,36 +870,28 @@ function drawGrid(
 
   const spacing = 100;
 
-
   ctx.strokeStyle =
-    'rgba(255,255,255,.055)';
-
+    'rgba(255,255,255,.05)';
 
   ctx.lineWidth = 1;
 
-
   ctx.beginPath();
-
 
   const startX =
     Math.floor(
       cameraX / spacing
     ) * spacing;
 
-
   const endX =
     cameraX + innerWidth;
-
 
   const startY =
     Math.floor(
       cameraY / spacing
     ) * spacing;
 
-
   const endY =
     cameraY + innerHeight;
-
 
   for (
     let x = startX;
@@ -1034,14 +904,12 @@ function drawGrid(
       0
     );
 
-
     ctx.lineTo(
       x - cameraX,
       innerHeight
     );
 
   }
-
 
   for (
     let y = startY;
@@ -1054,7 +922,6 @@ function drawGrid(
       y - cameraY
     );
 
-
     ctx.lineTo(
       innerWidth,
       y - cameraY
@@ -1062,21 +929,272 @@ function drawGrid(
 
   }
 
-
   ctx.stroke();
-
 }
 
 
+// ==============================
+// 캐릭터 색상
+// ==============================
+
+function playerColor(id) {
+
+  let hash = 0;
+
+  for (
+    let i = 0;
+    i < id.length;
+    i++
+  ) {
+
+    hash =
+      id.charCodeAt(i) +
+      ((hash << 5) - hash);
+
+  }
+
+  const colors = [
+    '#4fc3f7',
+    '#ff8a65',
+    '#81c784',
+    '#ba68c8',
+    '#ffd54f',
+    '#4db6ac',
+    '#f06292',
+    '#90a4ae'
+  ];
+
+  return colors[
+    Math.abs(hash) %
+    colors.length
+  ];
+}
+
 
 // ==============================
-// 화면 그리기
+// 사람 캐릭터
+// ==============================
+
+function drawCharacter(
+  player,
+  screenX,
+  screenY,
+  mine
+) {
+
+  ctx.save();
+
+  ctx.translate(
+    screenX,
+    screenY
+  );
+
+  ctx.rotate(
+    player.angle || 0
+  );
+
+  const color =
+    mine
+      ? '#45d4ff'
+      : playerColor(
+          player.id
+        );
+
+  // 그림자
+  ctx.beginPath();
+
+  ctx.ellipse(
+    -2,
+    8,
+    25,
+    16,
+    0,
+    0,
+    Math.PI * 2
+  );
+
+  ctx.fillStyle =
+    'rgba(0,0,0,.27)';
+
+  ctx.fill();
+
+
+  // 다리
+  ctx.lineWidth = 9;
+
+  ctx.lineCap = 'round';
+
+  ctx.strokeStyle =
+    '#263238';
+
+  ctx.beginPath();
+
+  ctx.moveTo(
+    -10,
+    -8
+  );
+
+  ctx.lineTo(
+    -20,
+    11
+  );
+
+  ctx.moveTo(
+    -10,
+    8
+  );
+
+  ctx.lineTo(
+    -20,
+    27
+  );
+
+  ctx.stroke();
+
+
+  // 몸
+  ctx.fillStyle =
+    color;
+
+  ctx.beginPath();
+
+  ctx.roundRect(
+    -12,
+    -16,
+    32,
+    32,
+    8
+  );
+
+  ctx.fill();
+
+
+  // 팔
+  ctx.lineWidth = 8;
+
+  ctx.strokeStyle =
+    '#e5b98f';
+
+  ctx.beginPath();
+
+  ctx.moveTo(
+    3,
+    -15
+  );
+
+  ctx.lineTo(
+    20,
+    -24
+  );
+
+  ctx.moveTo(
+    3,
+    15
+  );
+
+  ctx.lineTo(
+    20,
+    24
+  );
+
+  ctx.stroke();
+
+
+  // 머리
+  ctx.beginPath();
+
+  ctx.arc(
+    22,
+    0,
+    12,
+    0,
+    Math.PI * 2
+  );
+
+  ctx.fillStyle =
+    '#f2c49c';
+
+  ctx.fill();
+
+
+  // 머리카락
+  ctx.beginPath();
+
+  ctx.arc(
+    24,
+    0,
+    12,
+    Math.PI * 0.7,
+    Math.PI * 1.3
+  );
+
+  ctx.lineWidth = 5;
+
+  ctx.strokeStyle =
+    '#2d2522';
+
+  ctx.stroke();
+
+
+  // 보는 방향
+  ctx.beginPath();
+
+  ctx.arc(
+    29,
+    -4,
+    2,
+    0,
+    Math.PI * 2
+  );
+
+  ctx.arc(
+    29,
+    4,
+    2,
+    0,
+    Math.PI * 2
+  );
+
+  ctx.fillStyle =
+    '#263238';
+
+  ctx.fill();
+
+  ctx.restore();
+
+
+  // 이름은 회전하지 않음
+  ctx.fillStyle =
+    'rgba(255,255,255,.95)';
+
+  ctx.font =
+    '700 12px system-ui';
+
+  ctx.textAlign =
+    'center';
+
+  ctx.fillText(
+    mine
+      ? 'YOU'
+      : 'P-' +
+        player.id.slice(0, 4),
+
+    screenX,
+
+    screenY - 43
+  );
+}
+
+
+// ==============================
+// 렌더링
 // ==============================
 
 function render() {
 
-  requestAnimationFrame(render);
-
+  requestAnimationFrame(
+    render
+  );
 
   ctx.clearRect(
     0,
@@ -1085,42 +1203,57 @@ function render() {
     innerHeight
   );
 
-
   const me =
     players.find(
       player =>
         player.id === myId
     );
 
+  let cameraX = 0;
+  let cameraY = 0;
 
-  const cameraX =
-    me
-      ? Math.max(
-          0,
-          Math.min(
-            world.width - innerWidth,
-            me.x - innerWidth / 2
-          )
+  if (me) {
+
+    cameraX =
+      me.x -
+      innerWidth / 2;
+
+    cameraY =
+      me.y -
+      innerHeight / 2;
+
+    cameraX =
+      Math.max(
+        0,
+        Math.min(
+          Math.max(
+            0,
+            world.width -
+              innerWidth
+          ),
+          cameraX
         )
-      : 0;
+      );
 
-
-  const cameraY =
-    me
-      ? Math.max(
-          0,
-          Math.min(
-            world.height - innerHeight,
-            me.y - innerHeight / 2
-          )
+    cameraY =
+      Math.max(
+        0,
+        Math.min(
+          Math.max(
+            0,
+            world.height -
+              innerHeight
+          ),
+          cameraY
         )
-      : 0;
+      );
+
+  }
 
 
-
+  // 바닥
   ctx.fillStyle =
-    '#172033';
-
+    '#18243a';
 
   ctx.fillRect(
     0,
@@ -1129,20 +1262,17 @@ function render() {
     innerHeight
   );
 
-
   drawGrid(
     cameraX,
     cameraY
   );
 
 
-  // 맵 외곽선
+  // 맵 외곽
   ctx.strokeStyle =
-    'rgba(255,255,255,.35)';
+    'rgba(255,255,255,.45)';
 
-
-  ctx.lineWidth = 4;
-
+  ctx.lineWidth = 5;
 
   ctx.strokeRect(
     -cameraX,
@@ -1152,97 +1282,84 @@ function render() {
   );
 
 
-
   // ==============================
-  // 플레이어 그리기
+  // 간단한 맵 장식
   // ==============================
 
-  for (const player of players) {
+  ctx.fillStyle =
+    'rgba(70,110,90,.32)';
 
-    const screenX =
-      player.x - cameraX;
+  const zones = [
 
+    [700, 500, 600, 400],
 
-    const screenY =
-      player.y - cameraY;
+    [2100, 700, 900, 500],
 
+    [3800, 1800, 700, 600],
 
-    const mine =
-      player.id === myId;
+    [1000, 2100, 900, 500]
 
+  ];
 
+  for (
+    const zone
+    of zones
+  ) {
 
-    ctx.beginPath();
+    ctx.fillRect(
+      zone[0] -
+        cameraX,
 
+      zone[1] -
+        cameraY,
 
-    ctx.arc(
-      screenX,
-      screenY,
-      PLAYER_RADIUS_CLIENT,
-      0,
-      Math.PI * 2
-    );
-
-
-    ctx.fillStyle =
-      mine
-        ? '#57d2ff'
-        : '#ffcf67';
-
-
-    ctx.fill();
-
-
-    ctx.lineWidth = 3;
-
-
-    ctx.strokeStyle =
-      mine
-        ? '#e7fbff'
-        : '#fff4cf';
-
-
-    ctx.stroke();
-
-
-
-    ctx.fillStyle =
-      'rgba(255,255,255,.95)';
-
-
-    ctx.font =
-      '600 12px system-ui';
-
-
-    ctx.textAlign =
-      'center';
-
-
-    ctx.fillText(
-      mine
-        ? 'YOU'
-        : 'P-' +
-          player.id.slice(0, 4),
-
-      screenX,
-
-      screenY - 32
+      zone[2],
+      zone[3]
     );
 
   }
 
+
+  // 캐릭터
+  for (
+    const player
+    of players
+  ) {
+
+    const screenX =
+      player.x -
+      cameraX;
+
+    const screenY =
+      player.y -
+      cameraY;
+
+    if (
+      screenX < -80 ||
+      screenX >
+        innerWidth + 80 ||
+      screenY < -80 ||
+      screenY >
+        innerHeight + 80
+    ) {
+
+      continue;
+
+    }
+
+    drawCharacter(
+      player,
+      screenX,
+      screenY,
+      player.id === myId
+    );
+  }
+
 }
-
-
-// 플레이어 화면 크기
-const PLAYER_RADIUS_CLIENT = 22;
-
 
 render();
 
-
 </script>
-
 
 </body>
 
@@ -1253,21 +1370,29 @@ render();
 });
 
 
-
 // ==============================
 // 서버 시작
 // ==============================
 
-server.listen(PORT, () => {
+server.listen(
+  PORT,
+  () => {
 
-  console.log(
-    'Open Move server running on port ' +
-    PORT
-  );
+    console.log(
+      'Server running: ' +
+      PORT
+    );
 
-  console.log(
-    'Maximum players: ' +
-    MAX_PLAYERS
-  );
+    console.log(
+      'Map: ' +
+      WORLD.width +
+      ' x ' +
+      WORLD.height
+    );
 
-});
+    console.log(
+      'Max players: ' +
+      MAX_PLAYERS
+    );
+  }
+);
