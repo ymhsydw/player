@@ -39,64 +39,54 @@ const ELITE_SLIMES = 4;
 
 const SLIME_RESPAWN_MS = 5000;
 
-// 일반 슬라임 = 1
-// 엘리트 슬라임 = 2
-// 20점 → 보스
 const BOSS_TARGET = 20;
-
 const BOSS_HP = 1200;
 
 // ======================================================
-// 마법사 E - 파이어볼
+// 마법사 E - 영혼불
 // ======================================================
 
-const FIREBALL_SPEED = 900;
-const FIREBALL_DAMAGE = 60;
-const FIREBALL_RADIUS = 14;
-const FIREBALL_LIFE = 1.5;
-const FIREBALL_COOLDOWN = 900;
+const SOUL_FIRE_SPEED = 900;
+const SOUL_FIRE_DAMAGE = 60;
+const SOUL_FIRE_RADIUS = 15;
+const SOUL_FIRE_LIFE = 1.5;
+const SOUL_FIRE_COOLDOWN = 900;
 
 // ======================================================
-// 해적 E - 유령 해적선
+// 해적 E - 슬래시
 // ======================================================
 
-const PIRATE_SHIP_SPEED = 620;
+const SLASH_RANGE = 145;
 
-const PIRATE_SHIP_LIFE = 4.5;
+// 총 공격각 약 120도
+const SLASH_HALF_ANGLE =
+  Math.PI / 3;
 
-const PIRATE_SHIP_RADIUS = 95;
+const SLASH_DAMAGE = 120;
 
-const PIRATE_SHIP_COOLDOWN = 6000;
+const SLASH_COOLDOWN = 1000;
 
-const PIRATE_SHIP_BOSS_DAMAGE = 300;
-
-// 해적선 PNG 프레임 속도
-const PIRATE_SHIP_FRAME_MS = 120;
+const SLASH_EFFECT_LIFE = 0.28;
 
 // ======================================================
 // 서버 상태
 // ======================================================
 
 const players = new Map();
-
 const slimes = new Map();
 
-const fireballs = new Map();
-
-const pirateShips = new Map();
+const soulFires = new Map();
+const slashEffects = new Map();
 
 let nextSlimeId = 1;
-
-let nextFireballId = 1;
-
-let nextPirateShipId = 1;
+let nextSoulFireId = 1;
+let nextSlashId = 1;
 
 let bossProgress = 0;
-
 let bossId = null;
 
 // ======================================================
-// 공통 함수
+// 공통
 // ======================================================
 
 function clamp(
@@ -104,7 +94,6 @@ function clamp(
   min,
   max
 ) {
-
   return Math.max(
     min,
     Math.min(
@@ -117,9 +106,7 @@ function clamp(
 function randomPoint(
   margin = 120
 ) {
-
   return {
-
     x:
       margin +
       Math.random() *
@@ -135,7 +122,6 @@ function randomPoint(
         WORLD.height -
         margin * 2
       )
-
   };
 }
 
@@ -144,12 +130,10 @@ function directionFromVector(
   y,
   previous = 'front'
 ) {
-
   if (
     Math.abs(x) < 0.001 &&
     Math.abs(y) < 0.001
   ) {
-
     return previous;
   }
 
@@ -157,7 +141,6 @@ function directionFromVector(
     Math.abs(x) >
     Math.abs(y)
   ) {
-
     return x > 0
       ? 'right'
       : 'left';
@@ -173,12 +156,10 @@ function directionFromVector(
 // ======================================================
 
 function makePlayer(id) {
-
   const point =
     randomPoint(450);
 
   return {
-
     id,
 
     x:
@@ -187,17 +168,11 @@ function makePlayer(id) {
     y:
       point.y,
 
-    inputX:
-      0,
+    inputX: 0,
+    inputY: 0,
 
-    inputY:
-      0,
-
-    aimX:
-      0,
-
-    aimY:
-      1,
+    aimX: 0,
+    aimY: 1,
 
     direction:
       'front',
@@ -208,12 +183,11 @@ function makePlayer(id) {
     avatar:
       'mage',
 
-    lastMageCastAt:
+    lastSoulFireAt:
       0,
 
-    lastPirateCastAt:
+    lastSlashAt:
       0
-
   };
 }
 
@@ -224,7 +198,6 @@ function makePlayer(id) {
 function chooseSlimeDirection(
   slime
 ) {
-
   const angle =
     Math.random() *
     Math.PI *
@@ -235,23 +208,22 @@ function chooseSlimeDirection(
   if (
     slime.boss
   ) {
-
     speed =
       26 +
       Math.random() *
       14;
+  }
 
-  } else if (
+  else if (
     slime.elite
   ) {
-
     speed =
       52 +
       Math.random() *
       24;
+  }
 
-  } else {
-
+  else {
     speed =
       38 +
       Math.random() *
@@ -274,18 +246,16 @@ function chooseSlimeDirection(
 }
 
 // ======================================================
-// 일반 / 엘리트 슬라임 생성
+// 일반 / 엘리트 생성
 // ======================================================
 
 function createSlime(
   elite = false
 ) {
-
   const point =
     randomPoint(180);
 
   const slime = {
-
     id:
       nextSlimeId++,
 
@@ -315,21 +285,16 @@ function createSlime(
         ? 180
         : 60,
 
-    vx:
-      0,
+    vx: 0,
+    vy: 0,
 
-    vy:
-      0,
-
-    changeAt:
-      0,
+    changeAt: 0,
 
     alive:
       true,
 
     respawnAt:
       0
-
   };
 
   chooseSlimeDirection(
@@ -347,10 +312,7 @@ for (
   i < NORMAL_SLIMES;
   i++
 ) {
-
-  createSlime(
-    false
-  );
+  createSlime(false);
 }
 
 for (
@@ -358,22 +320,17 @@ for (
   i < ELITE_SLIMES;
   i++
 ) {
-
-  createSlime(
-    true
-  );
+  createSlime(true);
 }
 
 // ======================================================
-// 보스 슬라임
+// 보스
 // ======================================================
 
 function createBossSlime() {
-
   if (
     bossId !== null
   ) {
-
     return;
   }
 
@@ -381,7 +338,6 @@ function createBossSlime() {
     randomPoint(500);
 
   const boss = {
-
     id:
       nextSlimeId++,
 
@@ -406,11 +362,8 @@ function createBossSlime() {
     hp:
       BOSS_HP,
 
-    vx:
-      0,
-
-    vy:
-      0,
+    vx: 0,
+    vy: 0,
 
     changeAt:
       0,
@@ -420,7 +373,6 @@ function createBossSlime() {
 
     respawnAt:
       0
-
   };
 
   chooseSlimeDirection(
@@ -441,13 +393,11 @@ function createBossSlime() {
   io.emit(
     'bossSpawned',
     {
-
       x:
         boss.x,
 
       y:
         boss.y
-
     }
   );
 }
@@ -459,11 +409,9 @@ function createBossSlime() {
 function respawnSlime(
   slime
 ) {
-
   if (
     slime.boss
   ) {
-
     return;
   }
 
@@ -491,31 +439,26 @@ function respawnSlime(
 }
 
 // ======================================================
-// 보스 게이지
+// 보스 진행도
 // ======================================================
 
 function addBossProgress(
   slime
 ) {
-
-  // 보스가 살아있는 동안
-  // 다음 보스 게이지는 올라가지 않음
   if (
     bossId !== null
   ) {
-
     return;
   }
 
   if (
     slime.elite
   ) {
-
     bossProgress +=
       2;
+  }
 
-  } else {
-
+  else {
     bossProgress +=
       1;
   }
@@ -524,7 +467,6 @@ function addBossProgress(
     bossProgress >=
     BOSS_TARGET
   ) {
-
     createBossSlime();
   }
 }
@@ -537,11 +479,9 @@ function killSlime(
   slime,
   now
 ) {
-
   if (
     !slime.alive
   ) {
-
     return;
   }
 
@@ -549,7 +489,6 @@ function killSlime(
   if (
     slime.boss
   ) {
-
     slime.hp =
       0;
 
@@ -590,20 +529,18 @@ function killSlime(
 }
 
 // ======================================================
-// 마법사 파이어볼
+// 마법사 - 영혼불
 // ======================================================
 
-function castFireball(
+function castSoulFire(
   player,
   targetX,
   targetY
 ) {
-
   if (
     player.avatar !==
     'mage'
   ) {
-
     return false;
   }
 
@@ -612,10 +549,9 @@ function castFireball(
 
   if (
     now -
-    player.lastMageCastAt <
-    FIREBALL_COOLDOWN
+    player.lastSoulFireAt <
+    SOUL_FIRE_COOLDOWN
   ) {
-
     return false;
   }
 
@@ -631,7 +567,6 @@ function castFireball(
     !Number.isFinite(dx) ||
     !Number.isFinite(dy)
   ) {
-
     return false;
   }
 
@@ -644,7 +579,6 @@ function castFireball(
   if (
     length < 1
   ) {
-
     return false;
   }
 
@@ -654,7 +588,7 @@ function castFireball(
   dy /=
     length;
 
-  player.lastMageCastAt =
+  player.lastSoulFireAt =
     now;
 
   player.aimX =
@@ -671,12 +605,11 @@ function castFireball(
     );
 
   const id =
-    nextFireballId++;
+    nextSoulFireId++;
 
-  fireballs.set(
+  soulFires.set(
     id,
     {
-
       id,
 
       ownerId:
@@ -684,28 +617,25 @@ function castFireball(
 
       x:
         player.x +
-        dx *
-        42,
+        dx * 43,
 
       y:
         player.y +
-        dy *
-        42,
+        dy * 43,
 
       vx:
         dx *
-        FIREBALL_SPEED,
+        SOUL_FIRE_SPEED,
 
       vy:
         dy *
-        FIREBALL_SPEED,
+        SOUL_FIRE_SPEED,
 
       radius:
-        FIREBALL_RADIUS,
+        SOUL_FIRE_RADIUS,
 
       life:
-        FIREBALL_LIFE
-
+        SOUL_FIRE_LIFE
     }
   );
 
@@ -713,98 +643,16 @@ function castFireball(
 }
 
 // ======================================================
-// 해적선 방향
+// 해적 - 즉발 슬래시
 // ======================================================
 
-function getPirateDirection(
-  rawX,
-  rawY
+function castSlash(
+  player
 ) {
-
-  if (
-    Math.abs(rawX) >
-    Math.abs(rawY)
-  ) {
-
-    if (
-      rawX > 0
-    ) {
-
-      return {
-
-        name:
-          'right',
-
-        x:
-          1,
-
-        y:
-          0
-
-      };
-    }
-
-    return {
-
-      name:
-        'left',
-
-      x:
-        -1,
-
-      y:
-        0
-
-    };
-  }
-
-  if (
-    rawY > 0
-  ) {
-
-    return {
-
-      name:
-        'down',
-
-      x:
-        0,
-
-      y:
-        1
-
-    };
-  }
-
-  return {
-
-    name:
-      'up',
-
-    x:
-      0,
-
-    y:
-      -1
-
-  };
-}
-
-// ======================================================
-// 해적 유령선 스킬
-// ======================================================
-
-function castPirateShip(
-  player,
-  targetX,
-  targetY
-) {
-
   if (
     player.avatar !==
     'pirate'
   ) {
-
     return false;
   }
 
@@ -813,194 +661,191 @@ function castPirateShip(
 
   if (
     now -
-    player.lastPirateCastAt <
-    PIRATE_SHIP_COOLDOWN
+    player.lastSlashAt <
+    SLASH_COOLDOWN
   ) {
-
     return false;
   }
 
-  const rawX =
-    Number(targetX) -
-    player.x;
+  let aimX =
+    player.aimX;
 
-  const rawY =
-    Number(targetY) -
-    player.y;
+  let aimY =
+    player.aimY;
 
-  if (
-    !Number.isFinite(rawX) ||
-    !Number.isFinite(rawY)
-  ) {
-
-    return false;
-  }
-
-  if (
+  let aimLength =
     Math.hypot(
-      rawX,
-      rawY
-    ) < 1
-  ) {
-
-    return false;
-  }
-
-  const direction =
-    getPirateDirection(
-      rawX,
-      rawY
+      aimX,
+      aimY
     );
 
-  player.lastPirateCastAt =
+  if (
+    aimLength <
+    0.001
+  ) {
+    aimX = 0;
+    aimY = 1;
+    aimLength = 1;
+  }
+
+  aimX /=
+    aimLength;
+
+  aimY /=
+    aimLength;
+
+  player.lastSlashAt =
     now;
-
-  player.aimX =
-    direction.x;
-
-  player.aimY =
-    direction.y;
 
   player.direction =
     directionFromVector(
-      direction.x,
-      direction.y,
+      aimX,
+      aimY,
       player.direction
     );
 
-  const id =
-    nextPirateShipId++;
+  const slashId =
+    nextSlashId++;
 
-  pirateShips.set(
-    id,
+  slashEffects.set(
+    slashId,
     {
-
-      id,
+      id:
+        slashId,
 
       ownerId:
         player.id,
 
       x:
-        player.x +
-        direction.x *
-        110,
+        player.x,
 
       y:
-        player.y +
-        direction.y *
-        110,
+        player.y,
 
-      vx:
-        direction.x *
-        PIRATE_SHIP_SPEED,
+      aimX,
+      aimY,
 
-      vy:
-        direction.y *
-        PIRATE_SHIP_SPEED,
-
-      direction:
-        direction.name,
-
-      createdAt:
-        now,
+      angle:
+        Math.atan2(
+          aimY,
+          aimX
+        ),
 
       life:
-        PIRATE_SHIP_LIFE,
-
-      animFrame:
-        0,
-
-      bossHits:
-        new Set()
-
+        SLASH_EFFECT_LIFE
     }
   );
+
+  // ================================================
+  // 전방 부채꼴 공격
+  // ================================================
+
+  const minimumDot =
+    Math.cos(
+      SLASH_HALF_ANGLE
+    );
+
+  for (
+    const slime
+    of slimes.values()
+  ) {
+    if (
+      !slime.alive
+    ) {
+      continue;
+    }
+
+    const dx =
+      slime.x -
+      player.x;
+
+    const dy =
+      slime.y -
+      player.y;
+
+    const distance =
+      Math.hypot(
+        dx,
+        dy
+      );
+
+    if (
+      distance >
+      SLASH_RANGE +
+      slime.radius
+    ) {
+      continue;
+    }
+
+    // 너무 가까운 적은
+    // 방향과 관계없이 베이도록
+    if (
+      distance >
+      25
+    ) {
+      const nx =
+        dx /
+        distance;
+
+      const ny =
+        dy /
+        distance;
+
+      const dot =
+        nx *
+        aimX +
+        ny *
+        aimY;
+
+      if (
+        dot <
+        minimumDot
+      ) {
+        continue;
+      }
+    }
+
+    slime.hp -=
+      SLASH_DAMAGE;
+
+    if (
+      slime.hp <=
+      0
+    ) {
+      killSlime(
+        slime,
+        now
+      );
+    }
+  }
 
   return true;
 }
 
 // ======================================================
-// 현재 캐릭터 E
-// ======================================================
-
-function castCurrentSkill(
-  player,
-  targetX,
-  targetY
-) {
-
-  if (
-    player.avatar ===
-    'pirate'
-  ) {
-
-    return {
-
-      success:
-        castPirateShip(
-          player,
-          targetX,
-          targetY
-        ),
-
-      skill:
-        'pirateShip',
-
-      cooldown:
-        PIRATE_SHIP_COOLDOWN
-
-    };
-  }
-
-  return {
-
-    success:
-      castFireball(
-        player,
-        targetX,
-        targetY
-      ),
-
-    skill:
-      'fireball',
-
-    cooldown:
-      FIREBALL_COOLDOWN
-
-  };
-}
-
-// ======================================================
-// 멀티플레이
+// 멀티
 // ======================================================
 
 io.on(
   'connection',
   socket => {
-
     if (
       players.size >=
       MAX_PLAYERS
     ) {
-
       socket.emit(
         'serverFull',
         {
-
           maxPlayers:
             MAX_PLAYERS
-
         }
       );
 
       setTimeout(
-        () => {
-
+        () =>
           socket.disconnect(
             true
-          );
-
-        },
+          ),
         400
       );
 
@@ -1020,7 +865,6 @@ io.on(
     socket.emit(
       'welcome',
       {
-
         id:
           socket.id,
 
@@ -1030,36 +874,32 @@ io.on(
         maxPlayers:
           MAX_PLAYERS,
 
-        fireballCooldown:
-          FIREBALL_COOLDOWN,
+        soulFireCooldown:
+          SOUL_FIRE_COOLDOWN,
 
-        pirateCooldown:
-          PIRATE_SHIP_COOLDOWN
-
+        slashCooldown:
+          SLASH_COOLDOWN
       }
     );
 
     io.emit(
       'count',
       {
-
         current:
           players.size,
 
         max:
           MAX_PLAYERS
-
       }
     );
 
-    // ==================================================
+    // ================================================
     // 이동
-    // ==================================================
+    // ================================================
 
     socket.on(
       'input',
       (data = {}) => {
-
         const player =
           players.get(
             socket.id
@@ -1068,20 +908,15 @@ io.on(
         if (
           !player
         ) {
-
           return;
         }
 
         let x =
-          Number(
-            data.x
-          ) ||
+          Number(data.x) ||
           0;
 
         let y =
-          Number(
-            data.y
-          ) ||
+          Number(data.y) ||
           0;
 
         const length =
@@ -1091,10 +926,8 @@ io.on(
           );
 
         if (
-          length >
-          1
+          length > 1
         ) {
-
           x /=
             length;
 
@@ -1121,18 +954,16 @@ io.on(
             0.05 ||
           Math.abs(y) >
             0.05;
-
       }
     );
 
-    // ==================================================
-    // 마우스 시선
-    // ==================================================
+    // ================================================
+    // 시선
+    // ================================================
 
     socket.on(
       'aim',
       (data = {}) => {
-
         const player =
           players.get(
             socket.id
@@ -1141,20 +972,15 @@ io.on(
         if (
           !player
         ) {
-
           return;
         }
 
         let x =
-          Number(
-            data.x
-          ) ||
+          Number(data.x) ||
           0;
 
         let y =
-          Number(
-            data.y
-          ) ||
+          Number(data.y) ||
           0;
 
         const length =
@@ -1167,7 +993,6 @@ io.on(
           length <
           0.001
         ) {
-
           return;
         }
 
@@ -1189,18 +1014,16 @@ io.on(
             y,
             player.direction
           );
-
       }
     );
 
-    // ==================================================
-    // 캐릭터 선택
-    // ==================================================
+    // ================================================
+    // 캐릭터 변경
+    // ================================================
 
     socket.on(
       'setAvatar',
       (data = {}) => {
-
         const player =
           players.get(
             socket.id
@@ -1209,7 +1032,6 @@ io.on(
         if (
           !player
         ) {
-
           return;
         }
 
@@ -1224,27 +1046,21 @@ io.on(
             avatar
           )
         ) {
-
           return;
         }
 
         player.avatar =
           avatar;
-
       }
     );
 
-    // ==================================================
-    // E 스킬
-    //
-    // SAFE MODE
-    // 다른 플레이어 공격 판정 없음
-    // ==================================================
+    // ================================================
+    // 마법사 영혼불
+    // ================================================
 
     socket.on(
-      'castSkill',
+      'castSoulFire',
       (data = {}) => {
-
         const player =
           players.get(
             socket.id
@@ -1253,12 +1069,11 @@ io.on(
         if (
           !player
         ) {
-
           return;
         }
 
-        const result =
-          castCurrentSkill(
+        const success =
+          castSoulFire(
             player,
             data.targetX,
             data.targetY
@@ -1266,20 +1081,64 @@ io.on(
 
         socket.emit(
           'skillCastResult',
-          result
-        );
+          {
+            success,
 
+            skill:
+              'soulFire',
+
+            cooldown:
+              SOUL_FIRE_COOLDOWN
+          }
+        );
       }
     );
 
-    // ==================================================
-    // 접속 종료
-    // ==================================================
+    // ================================================
+    // 해적 슬래시
+    // ================================================
+
+    socket.on(
+      'castSlash',
+      () => {
+        const player =
+          players.get(
+            socket.id
+          );
+
+        if (
+          !player
+        ) {
+          return;
+        }
+
+        const success =
+          castSlash(
+            player
+          );
+
+        socket.emit(
+          'skillCastResult',
+          {
+            success,
+
+            skill:
+              'slash',
+
+            cooldown:
+              SLASH_COOLDOWN
+          }
+        );
+      }
+    );
+
+    // ================================================
+    // 종료
+    // ================================================
 
     socket.on(
       'disconnect',
       () => {
-
         players.delete(
           socket.id
         );
@@ -1287,24 +1146,20 @@ io.on(
         io.emit(
           'count',
           {
-
             current:
               players.size,
 
             max:
               MAX_PLAYERS
-
           }
         );
-
       }
     );
-
   }
 );
 
 // ======================================================
-// 서버 게임 루프
+// 게임 루프
 // ======================================================
 
 let lastTime =
@@ -1312,7 +1167,6 @@ let lastTime =
 
 setInterval(
   () => {
-
     const now =
       Date.now();
 
@@ -1323,21 +1177,21 @@ setInterval(
           lastTime
         ) /
         1000,
+
         0.1
       );
 
     lastTime =
       now;
 
-    // ==================================================
+    // ================================================
     // 플레이어 이동
-    // ==================================================
+    // ================================================
 
     for (
       const player
       of players.values()
     ) {
-
       player.x =
         clamp(
           player.x +
@@ -1363,28 +1217,24 @@ setInterval(
           WORLD.height -
           PLAYER_RADIUS
         );
-
     }
 
-    // ==================================================
-    // 슬라임 이동
-    // ==================================================
+    // ================================================
+    // 슬라임
+    // ================================================
 
     for (
       const slime
       of slimes.values()
     ) {
-
       if (
         !slime.alive
       ) {
-
         if (
           !slime.boss &&
           now >=
           slime.respawnAt
         ) {
-
           respawnSlime(
             slime
           );
@@ -1397,7 +1247,6 @@ setInterval(
         now >=
         slime.changeAt
       ) {
-
         chooseSlimeDirection(
           slime
         );
@@ -1418,7 +1267,6 @@ setInterval(
           WORLD.width -
           slime.radius
       ) {
-
         slime.vx *=
           -1;
 
@@ -1438,7 +1286,6 @@ setInterval(
           WORLD.height -
           slime.radius
       ) {
-
         slime.vy *=
           -1;
 
@@ -1450,101 +1297,90 @@ setInterval(
             slime.radius
           );
       }
-
     }
 
-    // ==================================================
-    // 파이어볼
-    // ==================================================
+    // ================================================
+    // 영혼불
+    // ================================================
 
     for (
-      const fireball
+      const fire
       of [
-        ...fireballs.values()
+        ...soulFires.values()
       ]
     ) {
-
-      fireball.x +=
-        fireball.vx *
+      fire.x +=
+        fire.vx *
         dt;
 
-      fireball.y +=
-        fireball.vy *
+      fire.y +=
+        fire.vy *
         dt;
 
-      fireball.life -=
+      fire.life -=
         dt;
 
       if (
-        fireball.life <=
+        fire.life <=
           0 ||
-
-        fireball.x <
-          -50 ||
-
-        fireball.x >
+        fire.x <
+          -60 ||
+        fire.x >
           WORLD.width +
-          50 ||
-
-        fireball.y <
-          -50 ||
-
-        fireball.y >
+          60 ||
+        fire.y <
+          -60 ||
+        fire.y >
           WORLD.height +
-          50
+          60
       ) {
-
-        fireballs.delete(
-          fireball.id
+        soulFires.delete(
+          fire.id
         );
 
         continue;
       }
 
-      // 슬라임에게만 피해
+      // 안전모드:
+      // 플레이어와 충돌 검사 없음
       for (
         const slime
         of slimes.values()
       ) {
-
         if (
           !slime.alive
         ) {
-
           continue;
         }
 
         const dx =
           slime.x -
-          fireball.x;
+          fire.x;
 
         const dy =
           slime.y -
-          fireball.y;
+          fire.y;
 
-        const hitDistance =
+        const hit =
           slime.radius +
-          FIREBALL_RADIUS;
+          fire.radius;
 
         if (
           dx * dx +
           dy * dy <=
-          hitDistance *
-          hitDistance
+          hit * hit
         ) {
-
           slime.hp -=
-            FIREBALL_DAMAGE;
+            SOUL_FIRE_DAMAGE;
 
-          fireballs.delete(
-            fireball.id
+          soulFires.delete(
+            fire.id
           );
 
           if (
             slime.hp <=
             0
           ) {
-
             killSlime(
               slime,
               now
@@ -1554,162 +1390,43 @@ setInterval(
           break;
         }
       }
-
     }
 
-    // ==================================================
-    // 해적 유령선
-    // ==================================================
+    // ================================================
+    // 슬래시 이펙트 수명
+    // ================================================
 
     for (
-      const ship
+      const slash
       of [
-        ...pirateShips.values()
+        ...slashEffects.values()
       ]
     ) {
-
-      ship.x +=
-        ship.vx *
+      slash.life -=
         dt;
-
-      ship.y +=
-        ship.vy *
-        dt;
-
-      ship.life -=
-        dt;
-
-      // 서버에서 프레임 진행
-      ship.animFrame =
-        Math.floor(
-          (
-            now -
-            ship.createdAt
-          ) /
-          PIRATE_SHIP_FRAME_MS
-        ) %
-        5;
 
       if (
-        ship.life <=
-          0 ||
-
-        ship.x <
-          -300 ||
-
-        ship.x >
-          WORLD.width +
-          300 ||
-
-        ship.y <
-          -300 ||
-
-        ship.y >
-          WORLD.height +
-          300
+        slash.life <=
+        0
       ) {
-
-        pirateShips.delete(
-          ship.id
-        );
-
-        continue;
-      }
-
-      // 플레이어 충돌 X
-      // 슬라임만 공격
-      for (
-        const slime
-        of slimes.values()
-      ) {
-
-        if (
-          !slime.alive
-        ) {
-
-          continue;
-        }
-
-        const dx =
-          slime.x -
-          ship.x;
-
-        const dy =
-          slime.y -
-          ship.y;
-
-        const hitDistance =
-          PIRATE_SHIP_RADIUS +
-          slime.radius;
-
-        if (
-          dx * dx +
-          dy * dy >
-          hitDistance *
-          hitDistance
-        ) {
-
-          continue;
-        }
-
-        // 보스
-        if (
-          slime.boss
-        ) {
-
-          if (
-            ship.bossHits.has(
-              slime.id
-            )
-          ) {
-
-            continue;
-          }
-
-          ship.bossHits.add(
-            slime.id
-          );
-
-          slime.hp -=
-            PIRATE_SHIP_BOSS_DAMAGE;
-
-          if (
-            slime.hp <=
-            0
-          ) {
-
-            killSlime(
-              slime,
-              now
-            );
-          }
-
-          continue;
-        }
-
-        // 일반 / 엘리트 즉사
-        killSlime(
-          slime,
-          now
+        slashEffects.delete(
+          slash.id
         );
       }
-
     }
 
-    // ==================================================
+    // ================================================
     // 상태 전송
-    // ==================================================
+    // ================================================
 
     io.emit(
       'state',
       {
-
         players:
           [
             ...players.values()
           ].map(
             player => ({
-
               id:
                 player.id,
 
@@ -1727,7 +1444,6 @@ setInterval(
 
               avatar:
                 player.avatar
-
             })
           ),
 
@@ -1736,7 +1452,6 @@ setInterval(
             ...slimes.values()
           ].map(
             slime => ({
-
               id:
                 slime.id,
 
@@ -1760,49 +1475,44 @@ setInterval(
 
               alive:
                 slime.alive
-
             })
           ),
 
-        fireballs:
+        soulFires:
           [
-            ...fireballs.values()
+            ...soulFires.values()
           ].map(
-            fireball => ({
-
+            fire => ({
               id:
-                fireball.id,
+                fire.id,
 
               x:
-                fireball.x,
+                fire.x,
 
               y:
-                fireball.y
-
+                fire.y
             })
           ),
 
-        pirateShips:
+        slashEffects:
           [
-            ...pirateShips.values()
+            ...slashEffects.values()
           ].map(
-            ship => ({
-
+            slash => ({
               id:
-                ship.id,
+                slash.id,
 
               x:
-                ship.x,
+                slash.x,
 
               y:
-                ship.y,
+                slash.y,
 
-              direction:
-                ship.direction,
+              angle:
+                slash.angle,
 
-              animFrame:
-                ship.animFrame
-
+              life:
+                slash.life
             })
           ),
 
@@ -1814,10 +1524,8 @@ setInterval(
         bossActive:
           bossId !==
           null
-
       }
     );
-
   },
 
   1000 /
@@ -1825,53 +1533,35 @@ setInterval(
 );
 
 // ======================================================
-// PNG 파일
+// 이미지
 // ======================================================
 
 app.get(
   '/mage.png',
   (_req, res) => {
-
     res.sendFile(
       path.join(
         __dirname,
         'mage.png'
       )
     );
-
   }
 );
 
 app.get(
   '/pirate.png',
   (_req, res) => {
-
     res.sendFile(
       path.join(
         __dirname,
         'pirate.png'
       )
     );
-
-  }
-);
-
-app.get(
-  '/pirate_ship.png',
-  (_req, res) => {
-
-    res.sendFile(
-      path.join(
-        __dirname,
-        'pirate_ship.png'
-      )
-    );
-
   }
 );
 
 // ======================================================
-// 게임 HTML
+// HTML
 // ======================================================
 
 app.get(
@@ -1904,7 +1594,6 @@ Forest RPG
 
 html,
 body {
-
   margin: 0;
 
   width: 100%;
@@ -1925,7 +1614,6 @@ body {
 }
 
 canvas {
-
   display:
     block;
 
@@ -1940,24 +1628,22 @@ canvas {
 }
 
 body.skill-selected canvas {
-
   cursor:
     crosshair;
 }
 
 /* ======================================================
-   왼쪽 HUD
+   HUD
 ====================================================== */
 
 #hud {
-
   position:
     fixed;
 
-  top:
+  left:
     12px;
 
-  left:
+  top:
     12px;
 
   z-index:
@@ -1989,11 +1675,11 @@ body.skill-selected canvas {
   padding:
     10px 13px;
 
-  font-size:
-    14px;
-
   line-height:
     1.55;
+
+  font-size:
+    14px;
 
   backdrop-filter:
     blur(6px);
@@ -2003,23 +1689,20 @@ body.skill-selected canvas {
 }
 
 #status {
-
   font-weight:
     900;
 }
 
 #skillName,
 #skillState {
-
   color:
-    #ffe082;
+    #78f5ff;
 
   font-weight:
     900;
 }
 
 #bossProgress {
-
   color:
     #ffb5b5;
 
@@ -2028,11 +1711,10 @@ body.skill-selected canvas {
 }
 
 /* ======================================================
-   보스 위치 표시
+   보스 위치
 ====================================================== */
 
 #bossLocator {
-
   position:
     fixed;
 
@@ -2089,25 +1771,15 @@ body.skill-selected canvas {
   font-weight:
     900;
 
-  box-shadow:
-    0 4px 18px
-    rgba(
-      0,
-      0,
-      0,
-      .3
-    );
-
   pointer-events:
     none;
 }
 
 /* ======================================================
-   안전 모드
+   안전모드
 ====================================================== */
 
 #safeMode {
-
   position:
     fixed;
 
@@ -2160,7 +1832,6 @@ body.skill-selected canvas {
 }
 
 #safeMode small {
-
   display:
     block;
 
@@ -2179,24 +1850,20 @@ body.skill-selected canvas {
 ====================================================== */
 
 #avatarPanel {
-
   position:
     fixed;
 
-  top:
-    76px;
-
   right:
     12px;
+
+  top:
+    76px;
 
   z-index:
     25;
 
   width:
     205px;
-
-  padding:
-    10px;
 
   color:
     white;
@@ -2221,12 +1888,14 @@ body.skill-selected canvas {
   border-radius:
     12px;
 
+  padding:
+    10px;
+
   backdrop-filter:
     blur(6px);
 }
 
 #avatarTitle {
-
   margin-bottom:
     8px;
 
@@ -2235,7 +1904,6 @@ body.skill-selected canvas {
 }
 
 #avatarGrid {
-
   display:
     grid;
 
@@ -2244,7 +1912,6 @@ body.skill-selected canvas {
 }
 
 .avatarBtn {
-
   border:
     2px solid
     rgba(
@@ -2282,27 +1949,24 @@ body.skill-selected canvas {
 }
 
 .avatarBtn.selected {
-
   border-color:
-    #ffe082;
+    #7cf8ff;
 
   background:
     rgba(
+      80,
+      230,
       255,
-      224,
-      130,
-      .15
+      .12
     );
 }
 
 .avatarBtn b {
-
   display:
     block;
 }
 
 .avatarBtn span {
-
   display:
     block;
 
@@ -2321,7 +1985,6 @@ body.skill-selected canvas {
 ====================================================== */
 
 #joystick {
-
   position:
     fixed;
 
@@ -2365,14 +2028,13 @@ body.skill-selected canvas {
 }
 
 #stick {
-
   position:
     absolute;
 
-  top:
+  left:
     46px;
 
-  left:
+  top:
     46px;
 
   width:
@@ -2401,7 +2063,6 @@ body.skill-selected canvas {
 ====================================================== */
 
 #skillE {
-
   position:
     fixed;
 
@@ -2423,10 +2084,10 @@ body.skill-selected canvas {
   border:
     3px solid
     rgba(
+      108,
+      246,
       255,
-      214,
-      128,
-      .86
+      .88
     );
 
   border-radius:
@@ -2434,10 +2095,10 @@ body.skill-selected canvas {
 
   background:
     rgba(
-      137,
-      45,
-      24,
-      .9
+      12,
+      97,
+      112,
+      .92
     );
 
   color:
@@ -2452,45 +2113,64 @@ body.skill-selected canvas {
 
   touch-action:
     none;
+
+  box-shadow:
+    0 0 18px
+    rgba(
+      72,
+      235,
+      255,
+      .25
+    );
 }
 
-#skillE.selected {
+#skillE.pirate {
+  border-color:
+    #ffd98a;
 
   background:
     rgba(
-      204,
-      72,
-      25,
-      .98
+      126,
+      63,
+      27,
+      .94
     );
 
   box-shadow:
-
-    0 0 0 5px
+    0 0 18px
     rgba(
       255,
       190,
-      72,
+      70,
+      .25
+    );
+}
+
+#skillE.selected {
+  box-shadow:
+    0 0 0 5px
+    rgba(
+      70,
+      240,
+      255,
       .2
     ),
 
-    0 0 26px
+    0 0 28px
     rgba(
+      45,
+      230,
       255,
-      105,
-      25,
-      .7
+      .75
     );
 }
 
 #skillE.cooling {
-
   opacity:
     .5;
 }
 
 #tip {
-
   position:
     fixed;
 
@@ -2531,26 +2211,17 @@ body.skill-selected canvas {
   max-width:
   700px
 ) {
-
   #avatarPanel {
-
     width:
       170px;
   }
 
   #bossLocator {
-
     top:
       67px;
 
     min-width:
       220px;
-
-    font-size:
-      11px;
-  }
-
-  #safeMode {
 
     font-size:
       11px;
@@ -2561,9 +2232,7 @@ body.skill-selected canvas {
   pointer:
   fine
 ) {
-
   #joystick {
-
     opacity:
       .32;
   }
@@ -2578,10 +2247,6 @@ body.skill-selected canvas {
 <canvas id="game">
 </canvas>
 
-<!-- ====================================================
-     HUD
-==================================================== -->
-
 <div id="hud">
 
 <div id="status">
@@ -2590,14 +2255,9 @@ body.skill-selected canvas {
 
 <div>
 접속자:
-<span id="count">
-0
-</span>
+<span id="count">0</span>
 /
-<span id="maxCount">
-20
-</span>
-명
+<span id="maxCount">20</span>명
 </div>
 
 <div>
@@ -2610,7 +2270,7 @@ body.skill-selected canvas {
 <div>
 E 스킬:
 <span id="skillName">
-파이어볼
+영혼불
 </span>
 </div>
 
@@ -2630,17 +2290,9 @@ E 스킬:
 
 </div>
 
-<!-- ====================================================
-     보스 위치
-==================================================== -->
-
 <div id="bossLocator">
 👑 BOSS 위치
 </div>
-
-<!-- ====================================================
-     안전모드
-==================================================== -->
 
 <div id="safeMode">
 
@@ -2651,10 +2303,6 @@ E 스킬:
 </small>
 
 </div>
-
-<!-- ====================================================
-     캐릭터 선택
-==================================================== -->
 
 <div id="avatarPanel">
 
@@ -2675,7 +2323,7 @@ type="button"
 </b>
 
 <span>
-E · 파이어볼
+E · 영혼불
 </span>
 
 </button>
@@ -2691,7 +2339,7 @@ type="button"
 </b>
 
 <span>
-E · 유령 해적선
+E · 즉발 슬래시
 </span>
 
 </button>
@@ -2700,10 +2348,6 @@ E · 유령 해적선
 
 </div>
 
-<!-- ====================================================
-     모바일 이동
-==================================================== -->
-
 <div id="joystick">
 
 <div id="stick">
@@ -2711,25 +2355,17 @@ E · 유령 해적선
 
 </div>
 
-<!-- ====================================================
-     스킬 버튼
-==================================================== -->
-
 <button
 id="skillE"
 type="button"
 >
-
 E
 <br>
-파이어볼
-
+영혼불
 </button>
 
 <div id="tip">
-
-E → 스킬 선택 → 맵 클릭
-
+마법사: E → 위치 클릭 / 해적: E → 즉시 슬래시
 </div>
 
 <script
@@ -2825,26 +2461,18 @@ let myId =
   null;
 
 let world = {
-
   width:
     5200,
 
   height:
     3400
-
 };
 
-let players =
-  [];
+let players = [];
+let slimes = [];
 
-let slimes =
-  [];
-
-let fireballs =
-  [];
-
-let pirateShips =
-  [];
+let soulFires = [];
+let slashEffects = [];
 
 let serverFull =
   false;
@@ -2852,28 +2480,20 @@ let serverFull =
 let keys =
   new Set();
 
-let joyX =
-  0;
-
-let joyY =
-  0;
+let joyX = 0;
+let joyY = 0;
 
 let joyPointer =
   null;
 
-let cameraX =
-  0;
-
-let cameraY =
-  0;
+let cameraX = 0;
+let cameraY = 0;
 
 let mouseX =
-  innerWidth /
-  2;
+  innerWidth / 2;
 
 let mouseY =
-  innerHeight /
-  2;
+  innerHeight / 2;
 
 let mouseAimActive =
   false;
@@ -2899,20 +2519,15 @@ let skillSelected =
 let waitingForCast =
   false;
 
-let mageCooldown =
+let soulFireCooldown =
   900;
 
-let pirateCooldown =
-  6000;
+let slashCooldown =
+  1000;
 
 let cooldownUntil = {
-
-  mage:
-    0,
-
-  pirate:
-    0
-
+  mage: 0,
+  pirate: 0
 };
 
 function cClamp(
@@ -2920,7 +2535,6 @@ function cClamp(
   min,
   max
 ) {
-
   return Math.max(
     min,
     Math.min(
@@ -2929,46 +2543,6 @@ function cClamp(
     )
   );
 }
-
-// ======================================================
-// 캐릭터 정보
-// ======================================================
-
-const CHARACTER_INFO = {
-
-  mage: {
-
-    name:
-      '마법사',
-
-    skill:
-      '파이어볼',
-
-    button:
-      'E<br>파이어볼',
-
-    selected:
-      '선택됨<br>목표 클릭'
-
-  },
-
-  pirate: {
-
-    name:
-      '해적',
-
-    skill:
-      '유령 해적선',
-
-    button:
-      'E<br>해적선',
-
-    selected:
-      '선택됨<br>방향 클릭'
-
-  }
-
-};
 
 // ======================================================
 // 이미지
@@ -2982,22 +2556,12 @@ let mageReady =
 
 mageImage.onload =
   () => {
-
     mageReady =
       true;
-
-  };
-
-mageImage.onerror =
-  () => {
-
-    statusEl.textContent =
-      'mage.png 로드 실패';
-
   };
 
 mageImage.src =
-  '/mage.png?v=20';
+  '/mage.png?v=30';
 
 
 const pirateImage =
@@ -3008,61 +2572,18 @@ let pirateReady =
 
 pirateImage.onload =
   () => {
-
     pirateReady =
       true;
-
-  };
-
-pirateImage.onerror =
-  () => {
-
-    statusEl.textContent =
-      'pirate.png 로드 실패';
-
   };
 
 pirateImage.src =
-  '/pirate.png?v=20';
-
-
-const pirateShipImage =
-  new Image();
-
-let pirateShipReady =
-  false;
-
-pirateShipImage.onload =
-  () => {
-
-    pirateShipReady =
-      true;
-
-    console.log(
-      'pirate_ship.png loaded',
-      pirateShipImage.width,
-      pirateShipImage.height
-    );
-
-  };
-
-pirateShipImage.onerror =
-  () => {
-
-    statusEl.textContent =
-      'pirate_ship.png 로드 실패';
-
-  };
-
-pirateShipImage.src =
-  '/pirate_ship.png?v=20';
+  '/pirate.png?v=30';
 
 // ======================================================
-// 화면 크기
+// 화면
 // ======================================================
 
 function resize() {
-
   const dpr =
     Math.min(
       devicePixelRatio ||
@@ -3117,11 +2638,9 @@ resize();
 socket.on(
   'connect',
   () => {
-
     if (
       !serverFull
     ) {
-
       statusEl.textContent =
         '숲 서버 접속됨';
     }
@@ -3131,18 +2650,17 @@ socket.on(
 socket.on(
   'welcome',
   data => {
-
     myId =
       data.id;
 
     world =
       data.world;
 
-    mageCooldown =
-      data.fireballCooldown;
+    soulFireCooldown =
+      data.soulFireCooldown;
 
-    pirateCooldown =
-      data.pirateCooldown;
+    slashCooldown =
+      data.slashCooldown;
 
     maxCountEl.textContent =
       data.maxPlayers;
@@ -3150,62 +2668,56 @@ socket.on(
     setAvatar(
       'mage'
     );
-
   }
 );
 
 socket.on(
   'count',
   data => {
-
     countEl.textContent =
       data.current;
 
     maxCountEl.textContent =
       data.max;
-
   }
 );
 
 socket.on(
   'state',
   data => {
-
     players =
       data.players;
 
     slimes =
       data.slimes;
 
-    fireballs =
-      data.fireballs;
+    soulFires =
+      data.soulFires ||
+      [];
 
-    pirateShips =
-      data.pirateShips ||
+    slashEffects =
+      data.slashEffects ||
       [];
 
     if (
       data.bossActive
     ) {
-
       bossProgressEl.textContent =
         '👑 보스 전투중';
+    }
 
-    } else {
-
+    else {
       bossProgressEl.textContent =
         data.bossProgress +
         ' / ' +
         data.bossTarget;
     }
-
   }
 );
 
 socket.on(
   'bossSpawned',
   data => {
-
     skillStateEl.textContent =
       '👑 보스 슬라임 출현!';
 
@@ -3213,7 +2725,7 @@ socket.on(
       'block';
 
     bossLocatorEl.textContent =
-      '👑 BOSS 출현 · X ' +
+      '👑 BOSS · X ' +
       Math.round(
         data.x
       ) +
@@ -3221,27 +2733,23 @@ socket.on(
       Math.round(
         data.y
       );
-
   }
 );
 
 socket.on(
   'bossDefeated',
   () => {
-
     skillStateEl.textContent =
       '🏆 보스 처치!';
 
     bossLocatorEl.style.display =
       'none';
-
   }
 );
 
 socket.on(
   'serverFull',
   data => {
-
     serverFull =
       true;
 
@@ -3262,36 +2770,30 @@ socket.on(
 
     socket.io.opts.reconnection =
       false;
-
   }
 );
 
 socket.on(
   'disconnect',
   () => {
-
     if (
       !serverFull
     ) {
-
       statusEl.textContent =
         '재접속 중...';
     }
-
   }
 );
 
 socket.on(
   'skillCastResult',
   data => {
-
     waitingForCast =
       false;
 
     if (
       !data.success
     ) {
-
       skillStateEl.textContent =
         '쿨타임';
 
@@ -3300,7 +2802,7 @@ socket.on(
 
     const avatar =
       data.skill ===
-        'pirateShip'
+      'slash'
         ? 'pirate'
         : 'mage';
 
@@ -3315,16 +2817,14 @@ socket.on(
     );
 
     updateSkillUI();
-
   }
 );
 
 // ======================================================
-// 내 플레이어 / 보스
+// 플레이어 / 보스
 // ======================================================
 
 function getMe() {
-
   return (
     players.find(
       player =>
@@ -3336,7 +2836,6 @@ function getMe() {
 }
 
 function getBoss() {
-
   return (
     slimes.find(
       slime =>
@@ -3354,16 +2853,13 @@ function getBoss() {
 function setAvatar(
   avatar
 ) {
-
   selectedAvatar =
     avatar;
 
   socket.emit(
     'setAvatar',
     {
-
       avatar
-
     }
   );
 
@@ -3373,13 +2869,12 @@ function setAvatar(
 
   avatarButtons.forEach(
     button => {
-
       button.classList.toggle(
         'selected',
+
         button.dataset.avatar ===
         avatar
       );
-
     }
   );
 
@@ -3388,22 +2883,17 @@ function setAvatar(
 
 avatarButtons.forEach(
   button => {
-
     button.addEventListener(
       'click',
       event => {
-
         event.preventDefault();
-
         event.stopPropagation();
 
         setAvatar(
           button.dataset.avatar
         );
-
       }
     );
-
   }
 );
 
@@ -3412,7 +2902,6 @@ avatarButtons.forEach(
 // ======================================================
 
 function isSkillCooling() {
-
   return (
     performance.now() <
     cooldownUntil[
@@ -3422,32 +2911,46 @@ function isSkillCooling() {
 }
 
 function updateSkillUI() {
-
-  const info =
-    CHARACTER_INFO[
-      selectedAvatar
-    ];
-
-  currentAvatarNameEl.textContent =
-    info.name;
-
-  skillNameEl.textContent =
-    info.skill;
-
   if (
-    isSkillCooling()
+    selectedAvatar ===
+    'pirate'
   ) {
+    currentAvatarNameEl.textContent =
+      '해적';
 
-    const remaining =
-      Math.max(
-        0,
-        cooldownUntil[
-          selectedAvatar
-        ] -
-        performance.now()
-      );
+    skillNameEl.textContent =
+      '슬래시';
 
     skillE.classList.add(
+      'pirate'
+    );
+
+    if (
+      isSkillCooling()
+    ) {
+      const remain =
+        Math.max(
+          0,
+
+          cooldownUntil.pirate -
+          performance.now()
+        );
+
+      skillE.classList.add(
+        'cooling'
+      );
+
+      skillE.innerHTML =
+        (
+          remain /
+          1000
+        ).toFixed(1) +
+        '초';
+
+      return;
+    }
+
+    skillE.classList.remove(
       'cooling'
     );
 
@@ -3456,8 +2959,39 @@ function updateSkillUI() {
     );
 
     skillE.innerHTML =
+      'E<br>슬래시';
+
+    return;
+  }
+
+  currentAvatarNameEl.textContent =
+    '마법사';
+
+  skillNameEl.textContent =
+    '영혼불';
+
+  skillE.classList.remove(
+    'pirate'
+  );
+
+  if (
+    isSkillCooling()
+  ) {
+    const remain =
+      Math.max(
+        0,
+
+        cooldownUntil.mage -
+        performance.now()
+      );
+
+    skillE.classList.add(
+      'cooling'
+    );
+
+    skillE.innerHTML =
       (
-        remaining /
+        remain /
         1000
       ).toFixed(1) +
       '초';
@@ -3476,20 +3010,8 @@ function updateSkillUI() {
 
   skillE.innerHTML =
     skillSelected
-      ? info.selected
-      : info.button;
-
-  if (
-    skillSelected
-  ) {
-
-    skillStateEl.textContent =
-      selectedAvatar ===
-      'mage'
-        ? '파이어볼 목표 위치 클릭'
-        : '해적선 발사 방향 클릭';
-  }
-
+      ? '선택됨<br>목표 클릭'
+      : 'E<br>영혼불';
 }
 
 setInterval(
@@ -3498,55 +3020,138 @@ setInterval(
 );
 
 // ======================================================
-// E 스킬 선택
+// 스킬 선택
 // ======================================================
 
 function setSkillSelected(
   selected
 ) {
+  skillSelected =
+    selected;
+
+  document.body.classList.toggle(
+    'skill-selected',
+
+    selected &&
+    selectedAvatar ===
+    'mage'
+  );
+
+  updateSkillUI();
+}
+
+// ======================================================
+// 현재 조준을 즉시 서버에 전송
+// ======================================================
+
+function sendAimNow() {
+  let aim =
+    null;
 
   if (
-    serverFull
+    mouseAimActive
   ) {
+    aim =
+      aimToScreen(
+        mouseX,
+        mouseY
+      );
+  }
 
+  if (
+    !aim &&
+    (
+      Math.abs(
+        joyX
+      ) >
+        .08 ||
+      Math.abs(
+        joyY
+      ) >
+        .08
+    )
+  ) {
+    const len =
+      Math.hypot(
+        joyX,
+        joyY
+      );
+
+    aim = {
+      x:
+        joyX /
+        len,
+
+      y:
+        joyY /
+        len
+    };
+  }
+
+  if (
+    aim
+  ) {
+    socket.emit(
+      'aim',
+      aim
+    );
+  }
+}
+
+// ======================================================
+// E 동작
+// ======================================================
+
+function useESkill() {
+  if (
+    serverFull ||
+    waitingForCast
+  ) {
     return;
   }
 
   if (
-    selected &&
     isSkillCooling()
   ) {
-
     skillStateEl.textContent =
       '쿨타임';
 
     return;
   }
 
-  skillSelected =
-    selected;
-
-  document.body.classList.toggle(
-    'skill-selected',
-    selected
-  );
-
-  updateSkillUI();
-}
-
-function selectSkill() {
+  // ================================================
+  // 해적 = 즉시 공격
+  // ================================================
 
   if (
-    waitingForCast ||
-    serverFull
+    selectedAvatar ===
+    'pirate'
   ) {
+    sendAimNow();
+
+    waitingForCast =
+      true;
+
+    socket.emit(
+      'castSlash'
+    );
+
+    skillStateEl.textContent =
+      '⚔️ 슬래시!';
 
     return;
   }
 
+  // ================================================
+  // 마법사 = 영혼불 선택 후 클릭
+  // ================================================
+
   setSkillSelected(
     true
   );
+
+  skillStateEl.textContent =
+    '영혼불 목표 위치 클릭';
 }
 
 // ======================================================
@@ -3556,7 +3161,6 @@ function selectSkill() {
 addEventListener(
   'keydown',
   event => {
-
     const key =
       event.key.toLowerCase();
 
@@ -3574,7 +3178,6 @@ addEventListener(
         key
       )
     ) {
-
       keys.add(
         key
       );
@@ -3583,11 +3186,9 @@ addEventListener(
     }
 
     if (
-      key ===
-      'e'
+      key === 'e'
     ) {
-
-      selectSkill();
+      useESkill();
 
       event.preventDefault();
     }
@@ -3596,23 +3197,19 @@ addEventListener(
       key ===
       'escape'
     ) {
-
       setSkillSelected(
         false
       );
     }
-
   }
 );
 
 addEventListener(
   'keyup',
   event => {
-
     keys.delete(
       event.key.toLowerCase()
     );
-
   }
 );
 
@@ -3623,14 +3220,12 @@ addEventListener(
 canvas.addEventListener(
   'pointermove',
   event => {
-
     if (
       event.pointerType !==
         'mouse' &&
       event.pointerType !==
         'pen'
     ) {
-
       return;
     }
 
@@ -3642,19 +3237,17 @@ canvas.addEventListener(
 
     mouseAimActive =
       true;
-
   }
 );
 
 // ======================================================
-// 모바일 조이스틱
+// 조이스틱
 // ======================================================
 
 function moveJoystick(
   clientX,
   clientY
 ) {
-
   const rect =
     joystick.getBoundingClientRect();
 
@@ -3690,7 +3283,6 @@ function moveJoystick(
     length >
     max
   ) {
-
     dx =
       dx /
       length *
@@ -3721,7 +3313,6 @@ function moveJoystick(
 joystick.addEventListener(
   'pointerdown',
   event => {
-
     joyPointer =
       event.pointerId;
 
@@ -3733,48 +3324,39 @@ joystick.addEventListener(
       event.clientX,
       event.clientY
     );
-
   }
 );
 
 joystick.addEventListener(
   'pointermove',
   event => {
-
     if (
       event.pointerId ===
       joyPointer
     ) {
-
       moveJoystick(
         event.clientX,
         event.clientY
       );
     }
-
   }
 );
 
 function releaseJoystick(
   event
 ) {
-
   if (
     event.pointerId !==
     joyPointer
   ) {
-
     return;
   }
 
   joyPointer =
     null;
 
-  joyX =
-    0;
-
-  joyY =
-    0;
+  joyX = 0;
+  joyY = 0;
 
   stick.style.transform =
     'translate(0px,0px)';
@@ -3793,13 +3375,10 @@ joystick.addEventListener(
 skillE.addEventListener(
   'pointerdown',
   event => {
-
     event.preventDefault();
-
     event.stopPropagation();
 
-    selectSkill();
-
+    useESkill();
   }
 );
 
@@ -3811,14 +3390,12 @@ function aimToScreen(
   screenX,
   screenY
 ) {
-
   const me =
     getMe();
 
   if (
     !me
   ) {
-
     return null;
   }
 
@@ -3842,12 +3419,10 @@ function aimToScreen(
     length <
     .001
   ) {
-
     return null;
   }
 
   return {
-
     x:
       x /
       length,
@@ -3855,27 +3430,22 @@ function aimToScreen(
     y:
       y /
       length
-
   };
 }
 
 function sendAim() {
-
   if (
     serverFull
   ) {
-
     return;
   }
 
   let aim =
     null;
 
-  // PC = 마우스
   if (
     mouseAimActive
   ) {
-
     aim =
       aimToScreen(
         mouseX,
@@ -3883,7 +3453,6 @@ function sendAim() {
       );
   }
 
-  // 모바일 = 조이스틱
   if (
     !aim &&
     (
@@ -3898,7 +3467,6 @@ function sendAim() {
         .08
     )
   ) {
-
     const length =
       Math.hypot(
         joyX,
@@ -3906,7 +3474,6 @@ function sendAim() {
       );
 
     aim = {
-
       x:
         joyX /
         length,
@@ -3914,14 +3481,12 @@ function sendAim() {
       y:
         joyY /
         length
-
     };
   }
 
   if (
     !aim
   ) {
-
     return;
   }
 
@@ -3938,7 +3503,6 @@ function sendAim() {
     ) >
       .01
   ) {
-
     socket.emit(
       'aim',
       aim
@@ -3950,31 +3514,29 @@ function sendAim() {
     lastAimY =
       aim.y;
   }
-
 }
 
 // ======================================================
-// 스킬 발사
+// 영혼불 클릭 발사
 // ======================================================
 
-function castSkillAt(
+function castSoulFireAt(
   screenX,
   screenY
 ) {
-
   if (
+    selectedAvatar !==
+      'mage' ||
     !skillSelected ||
     waitingForCast ||
     serverFull
   ) {
-
     return;
   }
 
   if (
     isSkillCooling()
   ) {
-
     return;
   }
 
@@ -3984,7 +3546,6 @@ function castSkillAt(
   if (
     !me
   ) {
-
     return;
   }
 
@@ -3994,7 +3555,6 @@ function castSkillAt(
       screenX,
 
       0,
-
       world.width
     );
 
@@ -4004,7 +3564,6 @@ function castSkillAt(
       screenY,
 
       0,
-
       world.height
     );
 
@@ -4012,13 +3571,10 @@ function castSkillAt(
     true;
 
   socket.emit(
-    'castSkill',
+    'castSoulFire',
     {
-
       targetX,
-
       targetY
-
     }
   );
 }
@@ -4026,11 +3582,11 @@ function castSkillAt(
 canvas.addEventListener(
   'pointerdown',
   event => {
-
     if (
+      selectedAvatar !==
+        'mage' ||
       !skillSelected
     ) {
-
       return;
     }
 
@@ -4042,33 +3598,27 @@ canvas.addEventListener(
     mouseY =
       event.clientY;
 
-    castSkillAt(
+    castSoulFireAt(
       event.clientX,
       event.clientY
     );
-
   }
 );
 
 // ======================================================
-// 이동 입력
+// 이동
 // ======================================================
 
 setInterval(
   () => {
-
     if (
       serverFull
     ) {
-
       return;
     }
 
-    let x =
-      0;
-
-    let y =
-      0;
+    let x = 0;
+    let y = 0;
 
     if (
       keys.has('a') ||
@@ -4076,7 +3626,6 @@ setInterval(
         'arrowleft'
       )
     ) {
-
       x--;
     }
 
@@ -4086,7 +3635,6 @@ setInterval(
         'arrowright'
       )
     ) {
-
       x++;
     }
 
@@ -4096,7 +3644,6 @@ setInterval(
         'arrowup'
       )
     ) {
-
       y--;
     }
 
@@ -4106,7 +3653,6 @@ setInterval(
         'arrowdown'
       )
     ) {
-
       y++;
     }
 
@@ -4121,7 +3667,6 @@ setInterval(
       ) >
         .08
     ) {
-
       x =
         joyX;
 
@@ -4139,7 +3684,6 @@ setInterval(
       length >
       1
     ) {
-
       x /=
         length;
 
@@ -4160,15 +3704,11 @@ setInterval(
       ) >
         .01
     ) {
-
       socket.emit(
         'input',
         {
-
           x,
-
           y
-
         }
       );
 
@@ -4180,7 +3720,6 @@ setInterval(
     }
 
     sendAim();
-
   },
 
   33
@@ -4197,7 +3736,6 @@ function visible(
   cx,
   cy
 ) {
-
   return (
     x >
       cx -
@@ -4219,14 +3757,9 @@ function visible(
   );
 }
 
-// ======================================================
-// 고정 랜덤
-// ======================================================
-
 function hashRand(
   n
 ) {
-
   const value =
     Math.sin(
       n *
@@ -4250,7 +3783,6 @@ function drawForest(
   cx,
   cy
 ) {
-
   ctx.fillStyle =
     '#3d6b34';
 
@@ -4261,7 +3793,6 @@ function drawForest(
     innerHeight
   );
 
-  // 길
   ctx.fillStyle =
     '#98764c';
 
@@ -4281,13 +3812,11 @@ function drawForest(
     world.height
   );
 
-  // 나무
   for (
     let i = 0;
     i < 150;
     i++
   ) {
-
     const x =
       90 +
       hashRand(
@@ -4324,7 +3853,6 @@ function drawForest(
         cy
       )
     ) {
-
       continue;
     }
 
@@ -4336,7 +3864,6 @@ function drawForest(
       y -
       cy;
 
-    // 그림자
     ctx.beginPath();
 
     ctx.ellipse(
@@ -4354,25 +3881,17 @@ function drawForest(
 
     ctx.fill();
 
-    // 줄기
     ctx.fillStyle =
       '#694526';
 
     ctx.fillRect(
       sx -
-      size *
-      .12,
-
+      size * .12,
       sy,
-
-      size *
-      .24,
-
-      size *
-      .85
+      size * .24,
+      size * .85
     );
 
-    // 나뭇잎
     ctx.beginPath();
 
     ctx.arc(
@@ -4385,22 +3904,18 @@ function drawForest(
 
     ctx.arc(
       sx -
-      size *
-      .55,
+      size * .55,
       sy,
-      size *
-      .58,
+      size * .58,
       0,
       Math.PI * 2
     );
 
     ctx.arc(
       sx +
-      size *
-      .55,
+      size * .55,
       sy,
-      size *
-      .58,
+      size * .58,
       0,
       Math.PI * 2
     );
@@ -4414,13 +3929,10 @@ function drawForest(
 
     ctx.arc(
       sx -
-      size *
-      .25,
+      size * .25,
       sy -
-      size *
-      .28,
-      size *
-      .3,
+      size * .28,
+      size * .3,
       0,
       Math.PI * 2
     );
@@ -4429,16 +3941,13 @@ function drawForest(
       '#47a457';
 
     ctx.fill();
-
   }
 
-  // 꽃
   for (
     let i = 0;
     i < 180;
     i++
   ) {
-
     const x =
       hashRand(
         i + 2701
@@ -4460,17 +3969,14 @@ function drawForest(
         cy
       )
     ) {
-
       continue;
     }
 
     ctx.beginPath();
 
     ctx.arc(
-      x -
-      cx,
-      y -
-      cy,
+      x - cx,
+      y - cy,
       2.2,
       0,
       Math.PI * 2
@@ -4478,31 +3984,28 @@ function drawForest(
 
     ctx.fillStyle =
       [
-        '#ffe082',
-        '#ff9e9e',
-        '#c9a3ff',
-        '#9ee7ff'
+        '#7afaff',
+        '#b6ffff',
+        '#6bdce8',
+        '#99f7ff'
       ][
         i % 4
       ];
 
     ctx.fill();
-
   }
 }
 
 // ======================================================
-// 캐릭터 걷기
+// 캐릭터 프레임
 // ======================================================
 
 function walkFrame(
   player
 ) {
-
   if (
     !player.moving
   ) {
-
     return 1;
   }
 
@@ -4518,12 +4021,10 @@ function walkFrame(
 function directionRow(
   direction
 ) {
-
   if (
     direction ===
     'back'
   ) {
-
     return 1;
   }
 
@@ -4531,7 +4032,6 @@ function directionRow(
     direction ===
     'left'
   ) {
-
     return 2;
   }
 
@@ -4539,7 +4039,6 @@ function directionRow(
     direction ===
     'right'
   ) {
-
     return 3;
   }
 
@@ -4547,14 +4046,11 @@ function directionRow(
 }
 
 // ======================================================
-// 마법사 실제 프레임
+// 마법사
 // ======================================================
 
 const MAGE_FRAMES = [
-
-  // 앞
   [
-
     {
       x: 112,
       y: 83,
@@ -4578,12 +4074,9 @@ const MAGE_FRAMES = [
       h: 291,
       ax: 120.5
     }
-
   ],
 
-  // 뒤
   [
-
     {
       x: 112,
       y: 426,
@@ -4607,12 +4100,9 @@ const MAGE_FRAMES = [
       h: 270,
       ax: 120.5
     }
-
   ],
 
-  // 왼쪽
   [
-
     {
       x: 119,
       y: 752,
@@ -4636,12 +4126,9 @@ const MAGE_FRAMES = [
       h: 269,
       ax: 113.5
     }
-
   ],
 
-  // 오른쪽
   [
-
     {
       x: 160,
       y: 1079,
@@ -4665,20 +4152,15 @@ const MAGE_FRAMES = [
       h: 263,
       ax: 78.5
     }
-
   ]
-
 ];
 
 // ======================================================
-// 해적 실제 프레임
+// 해적
 // ======================================================
 
 const PIRATE_FRAMES = [
-
-  // 앞
   [
-
     {
       x: 74,
       y: 30,
@@ -4702,12 +4184,9 @@ const PIRATE_FRAMES = [
       h: 317,
       ax: 126.5
     }
-
   ],
 
-  // 뒤
   [
-
     {
       x: 91,
       y: 384,
@@ -4731,12 +4210,9 @@ const PIRATE_FRAMES = [
       h: 325,
       ax: 115.5
     }
-
   ],
 
-  // 왼쪽
   [
-
     {
       x: 48,
       y: 738,
@@ -4760,12 +4236,9 @@ const PIRATE_FRAMES = [
       h: 312,
       ax: 132.5
     }
-
   ],
 
-  // 오른쪽
   [
-
     {
       x: 67,
       y: 1092,
@@ -4789,9 +4262,7 @@ const PIRATE_FRAMES = [
       h: 313,
       ax: 132.5
     }
-
   ]
-
 ];
 
 // ======================================================
@@ -4804,7 +4275,6 @@ function drawCharacter(
   screenY,
   isMe
 ) {
-
   const row =
     directionRow(
       player.direction
@@ -4816,19 +4286,13 @@ function drawCharacter(
     );
 
   let image;
-
   let ready;
-
   let frame;
-
-  const targetHeight =
-    128;
 
   if (
     player.avatar ===
     'pirate'
   ) {
-
     image =
       pirateImage;
 
@@ -4841,9 +4305,9 @@ function drawCharacter(
       ][
         column
       ];
+  }
 
-  } else {
-
+  else {
     image =
       mageImage;
 
@@ -4864,6 +4328,7 @@ function drawCharacter(
     Math.round(
       screenX
     ),
+
     Math.round(
       screenY
     )
@@ -4872,16 +4337,18 @@ function drawCharacter(
   if (
     ready
   ) {
+    const targetHeight =
+      128;
 
     const scale =
       targetHeight /
       frame.h;
 
-    const drawWidth =
+    const drawW =
       frame.w *
       scale;
 
-    const drawHeight =
+    const drawH =
       frame.h *
       scale;
 
@@ -4889,7 +4356,6 @@ function drawCharacter(
       31;
 
     ctx.drawImage(
-
       image,
 
       frame.x,
@@ -4901,15 +4367,14 @@ function drawCharacter(
       scale,
 
       FOOT_Y -
-      drawHeight,
+      drawH,
 
-      drawWidth,
-      drawHeight
-
+      drawW,
+      drawH
     );
+  }
 
-  } else {
-
+  else {
     ctx.fillStyle =
       player.avatar ===
         'pirate'
@@ -4922,12 +4387,10 @@ function drawCharacter(
       44,
       44
     );
-
   }
 
   ctx.restore();
 
-  // 이름
   ctx.fillStyle =
     'rgba(0,0,0,.42)';
 
@@ -4978,11 +4441,9 @@ function drawSlime(
   cx,
   cy
 ) {
-
   if (
     !slime.alive
   ) {
-
     return;
   }
 
@@ -5021,20 +4482,13 @@ function drawSlime(
     bounce
   );
 
-  // 그림자
   ctx.beginPath();
 
   ctx.ellipse(
     0,
-    radius *
-    .72,
-
-    radius *
-    .82,
-
-    radius *
-    .27,
-
+    radius * .72,
+    radius * .82,
+    radius * .27,
     0,
     0,
     Math.PI * 2
@@ -5045,7 +4499,6 @@ function drawSlime(
 
   ctx.fill();
 
-  // 몸
   ctx.beginPath();
 
   ctx.moveTo(
@@ -5055,24 +4508,21 @@ function drawSlime(
 
   ctx.quadraticCurveTo(
     -radius,
-    -radius *
-    .7,
+    -radius * .7,
     0,
     -radius
   );
 
   ctx.quadraticCurveTo(
     radius,
-    -radius *
-    .7,
+    -radius * .7,
     radius,
     8
   );
 
   ctx.quadraticCurveTo(
     0,
-    radius *
-    .85,
+    radius * .85,
     -radius,
     8
   );
@@ -5080,97 +4530,55 @@ function drawSlime(
   if (
     slime.boss
   ) {
-
     ctx.fillStyle =
       '#b32641';
+  }
 
-  } else if (
+  else if (
     slime.elite
   ) {
-
     ctx.fillStyle =
       '#774dd0';
+  }
 
-  } else {
-
+  else {
     ctx.fillStyle =
       '#58c96f';
   }
 
   ctx.fill();
 
-  // 광택
-  ctx.beginPath();
-
-  ctx.ellipse(
-    -radius *
-    .28,
-
-    -radius *
-    .28,
-
-    radius *
-    .2,
-
-    radius *
-    .12,
-
-    -.4,
-
-    0,
-
-    Math.PI * 2
-  );
-
-  ctx.fillStyle =
-    'rgba(255,255,255,.2)';
-
-  ctx.fill();
-
-  // 눈
   ctx.fillStyle =
     '#151719';
 
   ctx.beginPath();
 
   ctx.arc(
-    -radius *
-    .3,
-
+    -radius * .3,
     -4,
-
     slime.boss
       ? 7
       : 3,
-
     0,
-
     Math.PI * 2
   );
 
   ctx.arc(
-    radius *
-    .3,
-
+    radius * .3,
     -4,
-
     slime.boss
       ? 7
       : 3,
-
     0,
-
     Math.PI * 2
   );
 
   ctx.fill();
 
-  // 왕관
   if (
     slime.elite ||
     slime.boss
   ) {
-
     const crownY =
       -radius -
       4;
@@ -5191,25 +4599,19 @@ function drawSlime(
     );
 
     ctx.lineTo(
-      -size *
-      .6,
-
+      -size * .6,
       crownY -
       size
     );
 
     ctx.lineTo(
       0,
-
       crownY -
-      size *
-      .4
+      size * .4
     );
 
     ctx.lineTo(
-      size *
-      .6,
-
+      size * .6,
       crownY -
       size
     );
@@ -5222,12 +4624,10 @@ function drawSlime(
     ctx.closePath();
 
     ctx.fill();
-
   }
 
   ctx.restore();
 
-  // HP
   const barWidth =
     slime.boss
       ? 180
@@ -5298,7 +4698,6 @@ function drawSlime(
   if (
     slime.boss
   ) {
-
     ctx.fillStyle =
       '#ffd6db';
 
@@ -5314,11 +4713,11 @@ function drawSlime(
       hpY -
       10
     );
+  }
 
-  } else if (
+  else if (
     slime.elite
   ) {
-
     ctx.fillStyle =
       '#ffe59a';
 
@@ -5334,382 +4733,298 @@ function drawSlime(
       hpY -
       6
     );
-
   }
 }
 
 // ======================================================
-// 파이어볼 렌더
+// 마법사 영혼불 렌더
 // ======================================================
 
-function drawFireball(
-  fireball,
+function drawSoulFire(
+  fire,
   cx,
   cy
 ) {
-
   const x =
-    fireball.x -
+    fire.x -
     cx;
 
   const y =
-    fireball.y -
+    fire.y -
     cy;
+
+  const time =
+    performance.now() /
+    100;
+
+  const pulse =
+    Math.sin(
+      time +
+      fire.id
+    ) *
+    2;
 
   ctx.save();
 
+  // 외곽 시안 광원
+  ctx.globalCompositeOperation =
+    'lighter';
+
   ctx.shadowBlur =
-    20;
+    28;
 
   ctx.shadowColor =
-    '#ff6a20';
+    '#4ff6ff';
 
   ctx.beginPath();
 
   ctx.arc(
     x,
     y,
-    16,
+    18 +
+    pulse,
     0,
     Math.PI * 2
   );
 
   ctx.fillStyle =
-    'rgba(255,80,20,.35)';
+    'rgba(42,230,255,.28)';
 
   ctx.fill();
 
+  // 파란 불꽃 꼬리
+  ctx.beginPath();
+
+  ctx.moveTo(
+    x - 8,
+    y + 5
+  );
+
+  ctx.quadraticCurveTo(
+    x - 20,
+    y + 15,
+    x - 12,
+    y + 28
+  );
+
+  ctx.quadraticCurveTo(
+    x,
+    y + 19,
+    x + 7,
+    y + 5
+  );
+
+  ctx.fillStyle =
+    'rgba(34,205,230,.55)';
+
+  ctx.fill();
+
+  // 중간
   ctx.beginPath();
 
   ctx.arc(
     x,
     y,
-    10,
+    11 +
+    pulse * .35,
     0,
     Math.PI * 2
   );
 
   ctx.fillStyle =
-    '#ff6518';
+    '#22dce8';
 
   ctx.fill();
 
+  // 핵
   ctx.beginPath();
 
   ctx.arc(
-    x -
-    2,
-
-    y -
-    2,
-
-    5,
-
+    x - 2,
+    y - 2,
+    5.5,
     0,
     Math.PI * 2
   );
 
   ctx.fillStyle =
-    '#ffd35a';
+    '#c9ffff';
 
   ctx.fill();
+
+  // 영혼 느낌의 작은 입자
+  for (
+    let i = 0;
+    i < 3;
+    i++
+  ) {
+    const a =
+      time *
+      .6 +
+      i *
+      2.1;
+
+    ctx.beginPath();
+
+    ctx.arc(
+      x +
+      Math.cos(a) *
+      17,
+
+      y +
+      Math.sin(a) *
+      12,
+
+      2.2,
+
+      0,
+      Math.PI * 2
+    );
+
+    ctx.fillStyle =
+      'rgba(177,255,255,.8)';
+
+    ctx.fill();
+  }
 
   ctx.restore();
 }
 
 // ======================================================
-// 해적선 PNG 셀
-//
-// pirate_ship.png
-// 5열 × 4행
+// 해적 슬래시 렌더
 // ======================================================
 
-function getShipCell(
-  column,
-  row
-) {
-
-  const x1 =
-    Math.round(
-      column *
-      pirateShipImage.width /
-      5
-    );
-
-  const x2 =
-    Math.round(
-      (
-        column +
-        1
-      ) *
-      pirateShipImage.width /
-      5
-    );
-
-  const y1 =
-    Math.round(
-      row *
-      pirateShipImage.height /
-      4
-    );
-
-  const y2 =
-    Math.round(
-      (
-        row +
-        1
-      ) *
-      pirateShipImage.height /
-      4
-    );
-
-  return {
-
-    x:
-      x1,
-
-    y:
-      y1,
-
-    w:
-      x2 -
-      x1,
-
-    h:
-      y2 -
-      y1
-
-  };
-}
-
-function pirateShipRow(
-  direction
-) {
-
-  // 0 = 아래
-  // 1 = 위
-  // 2 = 왼쪽
-  // 3 = 오른쪽
-
-  if (
-    direction ===
-    'up'
-  ) {
-
-    return 1;
-  }
-
-  if (
-    direction ===
-    'left'
-  ) {
-
-    return 2;
-  }
-
-  if (
-    direction ===
-    'right'
-  ) {
-
-    return 3;
-  }
-
-  return 0;
-}
-
-// ======================================================
-// 해적선 PNG 렌더
-//
-// ★ 투명 문제 수정 ★
-//
-// 가운데 3번째 프레임을
-// 항상 선명한 본체로 표시.
-//
-// 현재 5프레임 애니메이션은
-// 본체 위에 이펙트로 추가.
-//
-// 따라서:
-//
-// 배 = 항상 선명
-// 파도 / 유령 = 움직임
-// ======================================================
-
-function drawPirateShip(
-  ship,
+function drawSlash(
+  slash,
   cx,
   cy
 ) {
-
-  if (
-    !pirateShipReady
-  ) {
-
-    return;
-  }
-
-  const screenX =
-    ship.x -
+  const x =
+    slash.x -
     cx;
 
-  const screenY =
-    ship.y -
+  const y =
+    slash.y -
     cy;
 
-  const row =
-    pirateShipRow(
-      ship.direction
-    );
-
-  const animColumn =
+  const lifePercent =
     Math.max(
       0,
       Math.min(
-        4,
-        Number(
-          ship.animFrame
-        ) ||
-        0
+        1,
+        slash.life /
+        0.28
       )
     );
 
-  // 가운데 프레임 = 선명한 본체
-  const solidCell =
-    getShipCell(
-      2,
-      row
-    );
+  const progress =
+    1 -
+    lifePercent;
 
-  // 현재 애니메이션 프레임
-  const effectCell =
-    getShipCell(
-      animColumn,
-      row
-    );
-
-  const DRAW_SIZE =
-    240;
-
-  const drawX =
-    screenX -
-    DRAW_SIZE /
-    2;
-
-  const drawY =
-    screenY -
-    DRAW_SIZE /
-    2;
+  const radius =
+    75 +
+    progress *
+    55;
 
   ctx.save();
 
-  // ==================================================
-  // 1. 선명한 해적선 본체
-  // ==================================================
-
-  ctx.globalAlpha =
-    1;
-
-  ctx.globalCompositeOperation =
-    'source-over';
-
-  ctx.drawImage(
-
-    pirateShipImage,
-
-    solidCell.x,
-    solidCell.y,
-    solidCell.w,
-    solidCell.h,
-
-    drawX,
-    drawY,
-
-    DRAW_SIZE,
-    DRAW_SIZE
-
+  ctx.translate(
+    x,
+    y
   );
 
-  // ==================================================
-  // 2. 유령 / 파도 애니메이션
-  // ==================================================
-
-  if (
-    animColumn !==
-    2
-  ) {
-
-    ctx.globalAlpha =
-      .82;
-
-    ctx.globalCompositeOperation =
-      'source-over';
-
-    ctx.drawImage(
-
-      pirateShipImage,
-
-      effectCell.x,
-      effectCell.y,
-      effectCell.w,
-      effectCell.h,
-
-      drawX,
-      drawY,
-
-      DRAW_SIZE,
-      DRAW_SIZE
-
-    );
-  }
-
-  // ==================================================
-  // 3. 파란 마력 효과 강화
-  // ==================================================
+  ctx.rotate(
+    slash.angle
+  );
 
   ctx.globalCompositeOperation =
     'lighter';
 
-  ctx.globalAlpha =
-    .18;
+  // 큰 금빛 검기
+  ctx.beginPath();
 
-  ctx.drawImage(
-
-    pirateShipImage,
-
-    effectCell.x,
-    effectCell.y,
-    effectCell.w,
-    effectCell.h,
-
-    drawX,
-    drawY,
-
-    DRAW_SIZE,
-    DRAW_SIZE
-
+  ctx.arc(
+    0,
+    0,
+    radius,
+    -0.7,
+    0.7
   );
+
+  ctx.strokeStyle =
+    'rgba(255,230,150,' +
+    lifePercent +
+    ')';
+
+  ctx.lineWidth =
+    16 *
+    lifePercent +
+    3;
+
+  ctx.stroke();
+
+  // 흰색 중심선
+  ctx.beginPath();
+
+  ctx.arc(
+    0,
+    0,
+    radius -
+    5,
+    -0.66,
+    0.66
+  );
+
+  ctx.strokeStyle =
+    'rgba(255,255,245,' +
+    lifePercent +
+    ')';
+
+  ctx.lineWidth =
+    4;
+
+  ctx.stroke();
+
+  // 작은 주황 검기
+  ctx.beginPath();
+
+  ctx.arc(
+    0,
+    0,
+    radius -
+    18,
+    -0.53,
+    0.53
+  );
+
+  ctx.strokeStyle =
+    'rgba(255,153,48,' +
+    lifePercent *
+    .8 +
+    ')';
+
+  ctx.lineWidth =
+    5;
+
+  ctx.stroke();
 
   ctx.restore();
 }
 
 // ======================================================
-// 보스 방향 문자
+// 보스 방향
 // ======================================================
 
 function bossDirectionText(
   dx,
   dy
 ) {
-
-  const angle =
-    Math.atan2(
-      dy,
-      dx
-    );
-
   const degree =
     (
-      angle *
+      Math.atan2(
+        dy,
+        dx
+      ) *
       180 /
       Math.PI +
       360
@@ -5722,7 +5037,6 @@ function bossDirectionText(
     degree <
       22.5
   ) {
-
     return '→';
   }
 
@@ -5730,7 +5044,6 @@ function bossDirectionText(
     degree <
     67.5
   ) {
-
     return '↘';
   }
 
@@ -5738,7 +5051,6 @@ function bossDirectionText(
     degree <
     112.5
   ) {
-
     return '↓';
   }
 
@@ -5746,7 +5058,6 @@ function bossDirectionText(
     degree <
     157.5
   ) {
-
     return '↙';
   }
 
@@ -5754,7 +5065,6 @@ function bossDirectionText(
     degree <
     202.5
   ) {
-
     return '←';
   }
 
@@ -5762,7 +5072,6 @@ function bossDirectionText(
     degree <
     247.5
   ) {
-
     return '↖';
   }
 
@@ -5770,7 +5079,6 @@ function bossDirectionText(
     degree <
     292.5
   ) {
-
     return '↑';
   }
 
@@ -5778,11 +5086,10 @@ function bossDirectionText(
 }
 
 // ======================================================
-// 보스 위치 HUD
+// 보스 HUD
 // ======================================================
 
 function updateBossLocator() {
-
   const boss =
     getBoss();
 
@@ -5792,7 +5099,6 @@ function updateBossLocator() {
   if (
     !boss
   ) {
-
     bossLocatorEl.style.display =
       'none';
 
@@ -5805,7 +5111,6 @@ function updateBossLocator() {
   if (
     !me
   ) {
-
     bossLocatorEl.textContent =
       '👑 BOSS · X ' +
       Math.round(
@@ -5835,15 +5140,12 @@ function updateBossLocator() {
       )
     );
 
-  const arrow =
+  bossLocatorEl.textContent =
+    '👑 BOSS ' +
     bossDirectionText(
       dx,
       dy
-    );
-
-  bossLocatorEl.textContent =
-    '👑 BOSS ' +
-    arrow +
+    ) +
     ' · 거리 ' +
     distance +
     ' · X ' +
@@ -5857,11 +5159,10 @@ function updateBossLocator() {
 }
 
 // ======================================================
-// 화면 밖 보스 안내 화살표
+// 보스 화면 밖 안내
 // ======================================================
 
 function drawBossGuide() {
-
   const boss =
     getBoss();
 
@@ -5872,15 +5173,14 @@ function drawBossGuide() {
     !boss ||
     !me
   ) {
-
     return;
   }
 
-  const bossScreenX =
+  const sx =
     boss.x -
     cameraX;
 
-  const bossScreenY =
+  const sy =
     boss.y -
     cameraY;
 
@@ -5888,27 +5188,22 @@ function drawBossGuide() {
     70;
 
   const inside =
-    bossScreenX >
+    sx >
       margin &&
-
-    bossScreenX <
+    sx <
       innerWidth -
       margin &&
-
-    bossScreenY >
+    sy >
       margin &&
-
-    bossScreenY <
+    sy <
       innerHeight -
       margin;
 
-  // 화면에 보이면 강조 원
   if (
     inside
   ) {
-
     const pulse =
-      7 +
+      6 +
       Math.sin(
         performance.now() /
         160
@@ -5926,8 +5221,8 @@ function drawBossGuide() {
     ctx.beginPath();
 
     ctx.arc(
-      bossScreenX,
-      bossScreenY,
+      sx,
+      sy,
       92 +
       pulse,
       0,
@@ -5941,22 +5236,21 @@ function drawBossGuide() {
     return;
   }
 
-  // 화면 밖일 경우
-  const playerScreenX =
+  const playerX =
     me.x -
     cameraX;
 
-  const playerScreenY =
+  const playerY =
     me.y -
     cameraY;
 
   const dx =
-    bossScreenX -
-    playerScreenX;
+    sx -
+    playerX;
 
   const dy =
-    bossScreenY -
-    playerScreenY;
+    sy -
+    playerY;
 
   const angle =
     Math.atan2(
@@ -6067,7 +5361,7 @@ function drawBossGuide() {
   );
 
   ctx.fillStyle =
-    '#ffffff';
+    '#fff';
 
   ctx.font =
     '900 12px system-ui';
@@ -6085,26 +5379,29 @@ function drawBossGuide() {
 }
 
 // ======================================================
-// 스킬 조준점
+// 영혼불 조준점
 // ======================================================
 
 function drawSkillTarget() {
-
   if (
+    selectedAvatar !==
+      'mage' ||
     !skillSelected ||
     !mouseAimActive
   ) {
-
     return;
   }
 
   ctx.save();
 
   ctx.strokeStyle =
-    selectedAvatar ===
-      'pirate'
-      ? 'rgba(90,235,255,.95)'
-      : 'rgba(255,125,45,.95)';
+    'rgba(90,245,255,.95)';
+
+  ctx.shadowBlur =
+    12;
+
+  ctx.shadowColor =
+    '#43efff';
 
   ctx.lineWidth =
     2;
@@ -6124,51 +5421,43 @@ function drawSkillTarget() {
   ctx.beginPath();
 
   ctx.moveTo(
-    mouseX -
-    19,
+    mouseX - 19,
     mouseY
   );
 
   ctx.lineTo(
-    mouseX -
-    7,
+    mouseX - 7,
     mouseY
   );
 
   ctx.moveTo(
-    mouseX +
-    7,
+    mouseX + 7,
     mouseY
   );
 
   ctx.lineTo(
-    mouseX +
-    19,
+    mouseX + 19,
     mouseY
   );
 
   ctx.moveTo(
     mouseX,
-    mouseY -
-    19
+    mouseY - 19
   );
 
   ctx.lineTo(
     mouseX,
-    mouseY -
-    7
+    mouseY - 7
   );
 
   ctx.moveTo(
     mouseX,
-    mouseY +
-    7
+    mouseY + 7
   );
 
   ctx.lineTo(
     mouseX,
-    mouseY +
-    19
+    mouseY + 19
   );
 
   ctx.stroke();
@@ -6181,7 +5470,6 @@ function drawSkillTarget() {
 // ======================================================
 
 function render() {
-
   requestAnimationFrame(
     render
   );
@@ -6196,16 +5484,12 @@ function render() {
   const me =
     getMe();
 
-  cameraX =
-    0;
-
-  cameraY =
-    0;
+  cameraX = 0;
+  cameraY = 0;
 
   if (
     me
   ) {
-
     cameraX =
       cClamp(
         me.x -
@@ -6237,7 +5521,6 @@ function render() {
       );
   }
 
-  // 맵
   drawForest(
     cameraX,
     cameraY
@@ -6248,7 +5531,6 @@ function render() {
     const slime
     of slimes
   ) {
-
     if (
       visible(
         slime.x,
@@ -6258,68 +5540,38 @@ function render() {
         cameraY
       )
     ) {
-
       drawSlime(
         slime,
         cameraX,
         cameraY
       );
     }
-
   }
 
-  // 파이어볼
+  // 영혼불
   for (
-    const fireball
-    of fireballs
+    const fire
+    of soulFires
   ) {
-
     if (
       visible(
-        fireball.x,
-        fireball.y,
+        fire.x,
+        fire.y,
         70,
         cameraX,
         cameraY
       )
     ) {
-
-      drawFireball(
-        fireball,
+      drawSoulFire(
+        fire,
         cameraX,
         cameraY
       );
     }
-
-  }
-
-  // 유령 해적선
-  for (
-    const ship
-    of pirateShips
-  ) {
-
-    if (
-      visible(
-        ship.x,
-        ship.y,
-        270,
-        cameraX,
-        cameraY
-      )
-    ) {
-
-      drawPirateShip(
-        ship,
-        cameraX,
-        cameraY
-      );
-    }
-
   }
 
   // 플레이어
-  const orderedPlayers =
+  const ordered =
     [
       ...players
     ].sort(
@@ -6333,9 +5585,8 @@ function render() {
 
   for (
     const player
-    of orderedPlayers
+    of ordered
   ) {
-
     if (
       !visible(
         player.x,
@@ -6345,12 +5596,10 @@ function render() {
         cameraY
       )
     ) {
-
       continue;
     }
 
     drawCharacter(
-
       player,
 
       player.x -
@@ -6361,9 +5610,29 @@ function render() {
 
       player.id ===
       myId
-
     );
+  }
 
+  // 슬래시는 캐릭터 위에 표시
+  for (
+    const slash
+    of slashEffects
+  ) {
+    if (
+      visible(
+        slash.x,
+        slash.y,
+        180,
+        cameraX,
+        cameraY
+      )
+    ) {
+      drawSlash(
+        slash,
+        cameraX,
+        cameraY
+      );
+    }
   }
 
   updateBossLocator();
@@ -6391,7 +5660,6 @@ render();
 server.listen(
   PORT,
   () => {
-
     console.log(
       'Forest RPG running on port ' +
       PORT
@@ -6405,6 +5673,5 @@ server.listen(
       'Boss target: ' +
       BOSS_TARGET
     );
-
   }
 );
