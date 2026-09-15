@@ -27,6 +27,164 @@ const MAPS = {
   }
 };
 
+const FOREST_CLEARING = { x: 2600, y: 1700, rx: 1050, ry: 680 };
+const FOREST_PATHS = [
+  [{ x: 2600, y: 1700 }, { x: 2050, y: 1700 }, { x: 1460, y: 1580 }, { x: 850, y: 1450 }],
+  [{ x: 2600, y: 1700 }, { x: 2700, y: 1150 }, { x: 3040, y: 650 }, { x: 3260, y: 100 }],
+  [{ x: 2600, y: 1700 }, { x: 3150, y: 1510 }, { x: 3700, y: 1120 }, { x: 4280, y: 650 }],
+  [{ x: 2600, y: 1700 }, { x: 3200, y: 2040 }, { x: 3680, y: 2340 }, { x: 4210, y: 2390 }],
+  [{ x: 2600, y: 1700 }, { x: 2230, y: 2280 }, { x: 1620, y: 2720 }, { x: 900, y: 3230 }]
+];
+const FOREST_RIVERS = [
+  { width: 230, points: [{ x: 420, y: -100 }, { x: 480, y: 400 }, { x: 610, y: 850 }, { x: 620, y: 1240 }, { x: 615, y: 1470 }, { x: 570, y: 1900 }, { x: 430, y: 2380 }, { x: 500, y: 2900 }, { x: 590, y: 3500 }] },
+  { width: 330, points: [{ x: 4380, y: 620 }, { x: 4500, y: 1020 }, { x: 4550, y: 1480 }, { x: 4470, y: 1900 }, { x: 4320, y: 2350 }, { x: 4410, y: 2820 }] }
+];
+const FOREST_BRIDGES = [
+  { x: 620, y: 1450, w: 380, h: 180 },
+  { x: 4330, y: 2360, w: 430, h: 190 }
+];
+const FOREST_CLIFFS = [
+  { x: 1600, y: 80, w: 930, h: 250 },
+  { x: 3500, y: 2760, w: 1250, h: 270 },
+  { x: 40, y: 1900, w: 500, h: 260 },
+  { x: 3660, y: 120, w: 620, h: 230 }
+];
+const FOREST_CAVE = { x: 4560, y: 340, r: 155 };
+
+function hashRand(n) {
+  const v = Math.sin(n * 12.9898) * 43758.5453;
+  return v - Math.floor(v);
+}
+function pointSegmentDistance(px, py, ax, ay, bx, by) {
+  const abx = bx - ax, aby = by - ay;
+  const denom = abx * abx + aby * aby || 1;
+  const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / denom));
+  const x = ax + abx * t, y = ay + aby * t;
+  return Math.hypot(px - x, py - y);
+}
+function pointInRect(x, y, rect, pad = 0) {
+  return x >= rect.x - rect.w / 2 - pad && x <= rect.x + rect.w / 2 + pad && y >= rect.y - rect.h / 2 - pad && y <= rect.y + rect.h / 2 + pad;
+}
+function pointInClearing(x, y, pad = 0) {
+  const rx = FOREST_CLEARING.rx + pad, ry = FOREST_CLEARING.ry + pad;
+  const dx = (x - FOREST_CLEARING.x) / rx, dy = (y - FOREST_CLEARING.y) / ry;
+  return dx * dx + dy * dy <= 1;
+}
+function pointNearForestPath(x, y, distance = 120) {
+  for (const pathPoints of FOREST_PATHS) {
+    for (let i = 1; i < pathPoints.length; i++) {
+      const a = pathPoints[i - 1], b = pathPoints[i];
+      if (pointSegmentDistance(x, y, a.x, a.y, b.x, b.y) <= distance) return true;
+    }
+  }
+  return false;
+}
+function pointNearRiver(x, y, pad = 0) {
+  for (const river of FOREST_RIVERS) {
+    for (let i = 1; i < river.points.length; i++) {
+      const a = river.points[i - 1], b = river.points[i];
+      if (pointSegmentDistance(x, y, a.x, a.y, b.x, b.y) <= river.width / 2 + pad) return true;
+    }
+  }
+  return false;
+}
+function pointInCliff(x, y, pad = 0) {
+  return FOREST_CLIFFS.some(c => pointInRect(x, y, c, pad));
+}
+function bridgeAt(x, y, pad = 0) {
+  return FOREST_BRIDGES.some(b => pointInRect(x, y, b, pad));
+}
+
+function buildRiverCollisionCircles() {
+  const circles = [];
+  for (const river of FOREST_RIVERS) {
+    for (let i = 1; i < river.points.length; i++) {
+      const a = river.points[i - 1], b = river.points[i];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const steps = Math.max(1, Math.ceil(len / 70));
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const x = a.x + (b.x - a.x) * t;
+        const y = a.y + (b.y - a.y) * t;
+        if (bridgeAt(x, y, 105)) continue;
+        circles.push({ x, y, r: river.width / 2 - 8 });
+      }
+    }
+  }
+  return circles;
+}
+const FOREST_WATER_COLLIDERS = buildRiverCollisionCircles();
+
+function buildForestTrees() {
+  const trees = [];
+  for (let i = 0; i < 260 && trees.length < 145; i++) {
+    const x = 90 + hashRand(i + 3) * 5020;
+    const y = 90 + hashRand(i + 903) * 3220;
+    if (pointInClearing(x, y, 120)) continue;
+    if (pointNearForestPath(x, y, 135)) continue;
+    if (pointNearRiver(x, y, 80)) continue;
+    if (pointInCliff(x, y, 55)) continue;
+    if (Math.hypot(x - FOREST_CAVE.x, y - FOREST_CAVE.y) < FOREST_CAVE.r + 120) continue;
+    const r = 30 + hashRand(i + 1803) * 18;
+    trees.push({ x: Math.round(x), y: Math.round(y), r: Math.round(r), trunk: Math.round(14 + r * 0.12) });
+  }
+  return trees;
+}
+function buildForestRocks() {
+  const rocks = [];
+  for (let i = 0; i < 90 && rocks.length < 34; i++) {
+    const x = 120 + hashRand(i + 4101) * 4960;
+    const y = 120 + hashRand(i + 4801) * 3160;
+    if (pointInClearing(x, y, 60)) continue;
+    if (pointNearForestPath(x, y, 80)) continue;
+    if (pointNearRiver(x, y, 25)) continue;
+    if (pointInCliff(x, y, 25)) continue;
+    const r = 18 + hashRand(i + 5501) * 20;
+    rocks.push({ x: Math.round(x), y: Math.round(y), r: Math.round(r) });
+  }
+  return rocks;
+}
+const FOREST_TREES = buildForestTrees();
+const FOREST_ROCKS = buildForestRocks();
+const FOREST_LAYOUT = {
+  clearing: FOREST_CLEARING,
+  paths: FOREST_PATHS,
+  rivers: FOREST_RIVERS,
+  bridges: FOREST_BRIDGES,
+  cliffs: FOREST_CLIFFS,
+  cave: FOREST_CAVE,
+  trees: FOREST_TREES,
+  rocks: FOREST_ROCKS
+};
+
+function circleRectOverlap(x, y, radius, rect) {
+  const left = rect.x - rect.w / 2, right = rect.x + rect.w / 2;
+  const top = rect.y - rect.h / 2, bottom = rect.y + rect.h / 2;
+  const cx = Math.max(left, Math.min(x, right));
+  const cy = Math.max(top, Math.min(y, bottom));
+  const dx = x - cx, dy = y - cy;
+  return dx * dx + dy * dy < radius * radius;
+}
+function forestBlocked(x, y, radius = 20) {
+  if (x < radius || y < radius || x > MAPS.forest.width - radius || y > MAPS.forest.height - radius) return true;
+  for (const water of FOREST_WATER_COLLIDERS) {
+    const dx = x - water.x, dy = y - water.y, rr = radius + water.r;
+    if (dx * dx + dy * dy < rr * rr) return true;
+  }
+  for (const cliff of FOREST_CLIFFS) if (circleRectOverlap(x, y, radius, cliff)) return true;
+  for (const tree of FOREST_TREES) {
+    const dx = x - tree.x, dy = y - tree.y, rr = radius + tree.trunk;
+    if (dx * dx + dy * dy < rr * rr) return true;
+  }
+  for (const rock of FOREST_ROCKS) {
+    const dx = x - rock.x, dy = y - rock.y, rr = radius + rock.r * 0.72;
+    if (dx * dx + dy * dy < rr * rr) return true;
+  }
+  const caveDist = Math.hypot(x - FOREST_CAVE.x, y - FOREST_CAVE.y);
+  if (caveDist < FOREST_CAVE.r + radius && y < FOREST_CAVE.y + 70) return true;
+  return false;
+}
+
 const MAX_PLAYERS = 20;
 const PLAYER_SPEED = 300;
 const PLAYER_RADIUS = 24;
@@ -172,19 +330,20 @@ function isFarEnoughFromOtherSlimes(x, y, minDistance) {
   return true;
 }
 function forestSpawnPoint(margin = 160, minDistance = 0) {
-  for (let tries = 0; tries < 120; tries++) {
+  for (let tries = 0; tries < 180; tries++) {
     const x = margin + Math.random() * (MAPS.forest.width - margin * 2);
     const y = margin + Math.random() * (MAPS.forest.height - margin * 2);
     if (isPointInForestSafeZone(x, y, 210)) continue;
+    if (forestBlocked(x, y, 44)) continue;
     if (!isFarEnoughFromOtherSlimes(x, y, minDistance)) continue;
     return { x, y };
   }
-  for (let tries = 0; tries < 50; tries++) {
+  for (let tries = 0; tries < 80; tries++) {
     const x = margin + Math.random() * (MAPS.forest.width - margin * 2);
     const y = margin + Math.random() * (MAPS.forest.height - margin * 2);
-    if (!isPointInForestSafeZone(x, y, 180)) return { x, y };
+    if (!isPointInForestSafeZone(x, y, 180) && !forestBlocked(x, y, 38)) return { x, y };
   }
-  return { x: 420, y: 420 };
+  return { x: 3400, y: 1700 };
 }
 function playerForestSafeSpawn() {
   const z = MAPS.forest.safeZone;
@@ -521,6 +680,15 @@ function constrainSlimeOutsideSafeZone(s) {
   s.vx = (-ny * side + nx * 0.35) * speed; s.vy = (nx * side + ny * 0.35) * speed; s.targetId = null;
 }
 
+function moveForestEntity(entity, dx, dy, radius) {
+  let blocked = false;
+  const nx = clamp(entity.x + dx, radius, MAPS.forest.width - radius);
+  if (!forestBlocked(nx, entity.y, radius)) entity.x = nx; else blocked = true;
+  const ny = clamp(entity.y + dy, radius, MAPS.forest.height - radius);
+  if (!forestBlocked(entity.x, ny, radius)) entity.y = ny; else blocked = true;
+  return blocked;
+}
+
 function nearestPortal(p) {
   let best = null, bestDist = Infinity;
   for (const portal of mapSpec(p.map).portals || []) {
@@ -656,8 +824,12 @@ setInterval(() => {
       continue;
     }
     const map = mapSpec(p.map);
-    p.x = clamp(p.x + p.inputX * PLAYER_SPEED * dt, PLAYER_RADIUS, map.width - PLAYER_RADIUS);
-    p.y = clamp(p.y + p.inputY * PLAYER_SPEED * dt, PLAYER_RADIUS, map.height - PLAYER_RADIUS);
+    if (p.map === 'forest') {
+      moveForestEntity(p, p.inputX * PLAYER_SPEED * dt, p.inputY * PLAYER_SPEED * dt, PLAYER_RADIUS);
+    } else {
+      p.x = clamp(p.x + p.inputX * PLAYER_SPEED * dt, PLAYER_RADIUS, map.width - PLAYER_RADIUS);
+      p.y = clamp(p.y + p.inputY * PLAYER_SPEED * dt, PLAYER_RADIUS, map.height - PLAYER_RADIUS);
+    }
     if (isPlayerSafe(p) && p.hp < p.maxHp) p.hp = Math.min(p.maxHp, p.hp + SAFE_HEAL_PER_SECOND * dt);
   }
 
@@ -667,9 +839,14 @@ setInterval(() => {
       continue;
     }
     if (!s.active && !s.boss) continue;
-    s.x += s.vx * dt; s.y += s.vy * dt;
-    if (s.x < s.radius || s.x > MAPS.forest.width - s.radius) { s.vx *= -1; s.x = clamp(s.x, s.radius, MAPS.forest.width - s.radius); }
-    if (s.y < s.radius || s.y > MAPS.forest.height - s.radius) { s.vy *= -1; s.y = clamp(s.y, s.radius, MAPS.forest.height - s.radius); }
+    const oldX = s.x, oldY = s.y;
+    const blocked = moveForestEntity(s, s.vx * dt, s.vy * dt, Math.max(16, s.radius * 0.7));
+    if (blocked) {
+      if (Math.abs(s.x - oldX) < 0.5) s.vx *= -1;
+      if (Math.abs(s.y - oldY) < 0.5) s.vy *= -1;
+      s.targetId = null;
+      s.changeAt = now + 250;
+    }
     constrainSlimeOutsideSafeZone(s);
   }
 
@@ -680,7 +857,7 @@ setInterval(() => {
     fire.x += fire.vx * dt; fire.y += fire.vy * dt; fire.life -= dt;
     const map = mapSpec(fire.map);
 
-    if (fire.life <= 0 || fire.x < -60 || fire.x > map.width + 60 || fire.y < -60 || fire.y > map.height + 60) {
+    if (fire.life <= 0 || fire.x < -60 || fire.x > map.width + 60 || fire.y < -60 || fire.y > map.height + 60 || (fire.map === 'forest' && forestBlocked(fire.x, fire.y, 5))) {
       soulFires.delete(fire.id);
       continue;
     }
@@ -768,6 +945,7 @@ app.get('/', (_req, res) => {
 <script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.3/dist/pixi.min.js"></script>
 <script>
 (async function(){
+const FOREST_LAYOUT=${JSON.stringify(FOREST_LAYOUT)};
 const E=id=>document.getElementById(id);
 const host=E('gameHost'),statusEl=E('status'),countEl=E('count'),maxCountEl=E('maxCount'),mapNameEl=E('mapName'),hpTextEl=E('hpText'),currentAvatarNameEl=E('currentAvatarName'),skillNameEl=E('skillName'),chainStateEl=E('chainState'),skillStateEl=E('skillState'),bossProgressEl=E('bossProgress'),bossLocatorEl=E('bossLocator'),zoneStatusEl=E('zoneStatus'),clearMessageEl=E('clearMessage'),deathMessageEl=E('deathMessage'),moveJoy=E('moveJoy'),moveKnob=E('moveKnob'),attackJoy=E('attackJoy'),attackKnob=E('attackKnob'),attackLabel=E('attackLabel'),chainBtn=E('chainBtn'),portalPrompt=E('portalPrompt'),portalBtn=E('portalBtn'),avatarButtons=[...document.querySelectorAll('.avatarBtn')];
 if(!window.PIXI){statusEl.textContent='PixiJS 로드 실패';return;}
@@ -785,11 +963,35 @@ const playerNodes=new Map(),slimeNodes=new Map(),projectileNodes=new Map(),effec
 const MAGE_FRAMES=[[{x:104,y:75,w:236,h:308},{x:376,y:74,w:237,h:308},{x:680,y:74,w:236,h:308}],[{x:98,y:417,w:234,h:287},{x:375,y:418,w:230,h:286},{x:679,y:417,w:229,h:287}],[{x:116,y:744,w:222,h:285},{x:387,y:745,w:221,h:284},{x:691,y:744,w:224,h:285}],[{x:152,y:1071,w:212,h:279},{x:419,y:1069,w:214,h:282},{x:722,y:1070,w:217,h:279}]];
 const PIRATE_FRAMES=[[{x:74,y:29,w:249,h:319,anchorX:107},{x:422,y:30,w:229,h:311,anchorX:121},{x:761,y:30,w:230,h:318,anchorX:144}],[{x:91,y:384,w:245,h:326,anchorX:90},{x:431,y:384,w:225,h:318,anchorX:112},{x:772,y:384,w:235,h:326,anchorX:133}],[{x:45,y:738,w:293,h:312,anchorX:136},{x:418,y:738,w:236,h:316,anchorX:125},{x:755,y:738,w:273,h:312,anchorX:150}],[{x:67,y:1092,w:270,h:312,anchorX:114},{x:427,y:1092,w:227,h:317,anchorX:116},{x:751,y:1092,w:266,h:313,anchorX:154}]];
 let mageTextures=null,pirateTextures=null;
-try{const mageBase=await PIXI.Assets.load('/mage.png?v=100');const pirateBase=await PIXI.Assets.load('/pirate.png?v=100');mageTextures=MAGE_FRAMES.map(row=>row.map(f=>new PIXI.Texture(mageBase.baseTexture,new PIXI.Rectangle(f.x,f.y,f.w,f.h))));pirateTextures=PIRATE_FRAMES.map(row=>row.map(f=>new PIXI.Texture(pirateBase.baseTexture,new PIXI.Rectangle(f.x,f.y,f.w,f.h))));}catch(err){statusEl.textContent='캐릭터 이미지 로드 실패';}
+try{const mageBase=await PIXI.Assets.load('/mage.png?v=110');const pirateBase=await PIXI.Assets.load('/pirate.png?v=110');mageTextures=MAGE_FRAMES.map(row=>row.map(f=>new PIXI.Texture(mageBase.baseTexture,new PIXI.Rectangle(f.x,f.y,f.w,f.h))));pirateTextures=PIRATE_FRAMES.map(row=>row.map(f=>new PIXI.Texture(pirateBase.baseTexture,new PIXI.Rectangle(f.x,f.y,f.w,f.h))));}catch(err){statusEl.textContent='캐릭터 이미지 로드 실패';}
 const socket=io({transports:['websocket','polling']});
-function hashRand(n){const v=Math.sin(n*12.9898)*43758.5453;return v-Math.floor(v)}function directionRow(d){return d==='back'?1:d==='left'?2:d==='right'?3:0}function walkFrame(p){return p.moving?Math.floor(performance.now()/145)%3:1}function clampClient(v,a,b){return Math.max(a,Math.min(b,v))}function norm(x,y,fx,fy){const l=Math.hypot(x,y);return l<.001?{x:fx,y:fy}:{x:x/l,y:y/l}}
+function directionRow(d){return d==='back'?1:d==='left'?2:d==='right'?3:0}function walkFrame(p){return p.moving?Math.floor(performance.now()/145)%3:1}function clampClient(v,a,b){return Math.max(a,Math.min(b,v))}function norm(x,y,fx,fy){const l=Math.hypot(x,y);return l<.001?{x:fx,y:fy}:{x:x/l,y:y/l}}
 function clearContainer(c){while(c.children.length){const child=c.removeChildAt(c.children.length-1);child.destroy({children:true});}}
-function buildMap(){clearContainer(staticLayer);clearContainer(portalLayer);const g=new PIXI.Graphics();if(currentMap==='forest'){g.beginFill(0x3d6b34).drawRect(0,0,world.width,world.height).endFill();g.beginFill(0x7dc468,0.24).lineStyle(5,0xb4ffa5,0.78).drawCircle(forestSafeZone.x,forestSafeZone.y,forestSafeZone.radius).endFill();const treeCount=lowPower?70:135;for(let i=0;i<treeCount;i++){const x=90+hashRand(i+1)*(world.width-180),y=90+hashRand(i+701)*(world.height-180),dx=x-forestSafeZone.x,dy=y-forestSafeZone.y;if(dx*dx+dy*dy<(forestSafeZone.radius+120)*(forestSafeZone.radius+120))continue;const s=20+hashRand(i+1401)*23;g.beginFill(0x694526).drawRect(x-s*.1,y,s*.2,s*.72).endFill();g.beginFill(0x287a3e).drawCircle(x,y-6,s).endFill();if(!lowPower)g.beginFill(0x47a457,0.8).drawCircle(x-s*.25,y-s*.25,s*.28).endFill();}if(!lowPower){for(let i=0;i<90;i++){const x=hashRand(i+2701)*world.width,y=hashRand(i+3301)*world.height,dx=x-forestSafeZone.x,dy=y-forestSafeZone.y;if(dx*dx+dy*dy<(forestSafeZone.radius+30)*(forestSafeZone.radius+30))continue;const colors=[0xffe082,0xff9e9e,0xc9a3ff,0x9ee7ff];g.beginFill(colors[i%4]).drawCircle(x,y,2).endFill();}}}else if(currentMap==='village'){g.beginFill(0xc9b98b).drawRect(0,0,world.width,world.height).endFill();g.beginFill(0xb9ad88).drawCircle(1300,950,330).endFill();const houses=[[520,430,250,170,0x994c45],[1000,340,260,180,0x7d5144],[1590,350,250,170,0x995d3f],[2100,470,270,185,0x81505d],[470,1320,260,180,0x84543e],[1030,1460,250,170,0x9a5548],[1620,1470,260,180,0x7d5144],[2140,1310,250,170,0x995d3f]];for(const h of houses){const x=h[0],y=h[1],w=h[2],hh=h[3],roof=h[4];g.beginFill(0xead6aa).drawRect(x-w/2,y-hh/2,w,hh).endFill();g.beginFill(roof).moveTo(x-w/2-14,y-hh/2+5).lineTo(x,y-hh/2-52).lineTo(x+w/2+14,y-hh/2+5).closePath().endFill();g.beginFill(0x7b4f2b).drawRect(x-16,y+hh/2-48,32,48).endFill();}}else{g.beginFill(0x61564e).drawRect(0,0,world.width,world.height).endFill();g.beginFill(0x786b60).lineStyle(10,0xd4c19a).drawRect(180,180,world.width-360,world.height-360).endFill();g.lineStyle(3,0xffffff,0.15).drawCircle(world.width/2,world.height/2,270).moveTo(world.width/2-420,world.height/2).lineTo(world.width/2+420,world.height/2);}staticLayer.addChild(g);for(const p of currentPortals){const c=new PIXI.Container();c.position.set(p.x,p.y);c.portal=p;const ring=new PIXI.Graphics().lineStyle(7,0x9b82ff,0.9).drawCircle(0,0,42).beginFill(0x8264ff,0.25).drawCircle(0,0,25).endFill();const label=new PIXI.Text(p.label||'포탈',{fontFamily:'system-ui',fontSize:13,fontWeight:'900',fill:0xffffff,stroke:0x27183e,strokeThickness:4});label.anchor.set(.5,1);label.position.set(0,-52);c.addChild(ring,label);c.ring=ring;portalLayer.addChild(c);}}
+function drawPolyline(g,points,width,color,alpha){if(!points.length)return;g.lineStyle(width,color,alpha);g.moveTo(points[0].x,points[0].y);for(let i=1;i<points.length;i++)g.lineTo(points[i].x,points[i].y);}
+function buildMap(){
+  clearContainer(staticLayer);clearContainer(portalLayer);const g=new PIXI.Graphics();
+  if(currentMap==='forest'){
+    g.beginFill(0x35682f).drawRect(0,0,world.width,world.height).endFill();
+    for(let i=0;i<70;i++){const x=(i*811)%world.width,y=(i*1297)%world.height,r=90+(i%6)*32;g.beginFill(i%2?0x3d7436:0x2f6030,0.16).drawCircle(x,y,r).endFill();}
+    for(const river of FOREST_LAYOUT.rivers){drawPolyline(g,river.points,river.width+30,0x294a55,0.95);drawPolyline(g,river.points,river.width,0x267ca0,1);drawPolyline(g,river.points,Math.max(10,river.width*.08),0x70cbe5,0.38);}
+    const c=FOREST_LAYOUT.clearing;g.beginFill(0x75aa45,1).drawEllipse(c.x,c.y,c.rx,c.ry).endFill();g.lineStyle(7,0x9bcf61,0.55).drawEllipse(c.x,c.y,c.rx-20,c.ry-20);
+    for(const pathPoints of FOREST_LAYOUT.paths){drawPolyline(g,pathPoints,128,0x8f7447,0.45);drawPolyline(g,pathPoints,105,0xc8a96b,1);drawPolyline(g,pathPoints,48,0xd7bc7f,0.38);}
+    for(const cliff of FOREST_LAYOUT.cliffs){const left=cliff.x-cliff.w/2,top=cliff.y-cliff.h/2;g.beginFill(0x38432d).drawRoundedRect(left,top,cliff.w,cliff.h,36).endFill();g.beginFill(0x6b7454).drawRoundedRect(left+14,top+10,cliff.w-28,cliff.h*.58,28).endFill();for(let k=0;k<Math.max(4,Math.floor(cliff.w/110));k++){const bx=left+45+k*95,by=top+cliff.h*.58+(k%2)*22;g.beginFill(k%2?0x59624a:0x747c61).drawCircle(bx,by,35+(k%3)*7).endFill();}}
+    const cave=FOREST_LAYOUT.cave;g.beginFill(0x45483c).drawCircle(cave.x,cave.y,cave.r+55).endFill();g.beginFill(0x68705a).drawCircle(cave.x,cave.y,cave.r+22).endFill();g.beginFill(0x171a17).drawEllipse(cave.x,cave.y+38,cave.r*.72,cave.r*.7).endFill();g.beginFill(0x282c27).drawEllipse(cave.x,cave.y+68,cave.r*.48,cave.r*.42).endFill();
+    for(const rock of FOREST_LAYOUT.rocks){g.beginFill(0x4e5846,0.45).drawEllipse(rock.x+5,rock.y+9,rock.r*.9,rock.r*.45).endFill();g.beginFill(0x737b68).drawCircle(rock.x,rock.y,rock.r).endFill();g.beginFill(0x939987,0.55).drawCircle(rock.x-rock.r*.25,rock.y-rock.r*.3,rock.r*.32).endFill();}
+    for(const tree of FOREST_LAYOUT.trees){const x=tree.x,y=tree.y,r=tree.r;g.beginFill(0x172e1c,0.35).drawEllipse(x+7,y+r*.72,r*.9,r*.34).endFill();g.beginFill(0x5f4025).drawRect(x-tree.trunk*.38,y-2,tree.trunk*.76,r*.92).endFill();g.beginFill(0x1f6539).drawCircle(x-r*.43,y-r*.08,r*.68).drawCircle(x+r*.43,y-r*.08,r*.68).drawCircle(x,y-r*.42,r*.82).endFill();g.beginFill(0x3f9450,0.75).drawCircle(x-r*.18,y-r*.62,r*.32).endFill();}
+    for(const bridge of FOREST_LAYOUT.bridges){const left=bridge.x-bridge.w/2,top=bridge.y-bridge.h/2;g.beginFill(0x553b25).drawRoundedRect(left-12,top+18,bridge.w+24,bridge.h-36,12).endFill();for(let plank=0;plank<11;plank++){const px=left+plank*(bridge.w/10);g.beginFill(plank%2?0x9b6a3b:0xad7846).drawRect(px-9,top+26,18,bridge.h-52).endFill();}g.lineStyle(7,0x402d1e).moveTo(left,top+22).lineTo(left+bridge.w,top+22).moveTo(left,top+bridge.h-22).lineTo(left+bridge.w,top+bridge.h-22);}
+    g.beginFill(0x93c75f,0.16).lineStyle(5,0xc9ffb8,0.55).drawCircle(forestSafeZone.x,forestSafeZone.y,forestSafeZone.radius).endFill();
+    if(!lowPower){for(let i=0;i<150;i++){const x=(i*977+333)%world.width,y=(i*557+911)%world.height;if(Math.hypot(x-c.x,y-c.y)>Math.max(c.rx,c.ry)*1.02)continue;g.beginFill([0xffe082,0xff9e9e,0xc9a3ff,0x9ee7ff][i%4],0.9).drawCircle(x,y,2+(i%2)).endFill();}}
+  }else if(currentMap==='village'){
+    g.beginFill(0xc9b98b).drawRect(0,0,world.width,world.height).endFill();g.beginFill(0xb9ad88).drawCircle(1300,950,330).endFill();const houses=[[520,430,250,170,0x994c45],[1000,340,260,180,0x7d5144],[1590,350,250,170,0x995d3f],[2100,470,270,185,0x81505d],[470,1320,260,180,0x84543e],[1030,1460,250,170,0x9a5548],[1620,1470,260,180,0x7d5144],[2140,1310,250,170,0x995d3f]];for(const h of houses){const x=h[0],y=h[1],w=h[2],hh=h[3],roof=h[4];g.beginFill(0xead6aa).drawRect(x-w/2,y-hh/2,w,hh).endFill();g.beginFill(roof).moveTo(x-w/2-14,y-hh/2+5).lineTo(x,y-hh/2-52).lineTo(x+w/2+14,y-hh/2+5).closePath().endFill();g.beginFill(0x7b4f2b).drawRect(x-16,y+hh/2-48,32,48).endFill();}
+  }else{
+    g.beginFill(0x61564e).drawRect(0,0,world.width,world.height).endFill();g.beginFill(0x786b60).lineStyle(10,0xd4c19a).drawRect(180,180,world.width-360,world.height-360).endFill();g.lineStyle(3,0xffffff,0.15).drawCircle(world.width/2,world.height/2,270).moveTo(world.width/2-420,world.height/2).lineTo(world.width/2+420,world.height/2);
+  }
+  staticLayer.addChild(g);
+  if(currentMap==='forest'){const label=new PIXI.Text('중앙 광장 · 안전지대',{fontFamily:'system-ui',fontSize:24,fontWeight:'900',fill:0xe9ffd5,stroke:0x27421f,strokeThickness:5});label.anchor.set(.5);label.position.set(FOREST_LAYOUT.clearing.x,FOREST_LAYOUT.clearing.y-510);staticLayer.addChild(label);}
+  for(const p of currentPortals){const node=new PIXI.Container();node.position.set(p.x,p.y);node.portal=p;const ring=new PIXI.Graphics().lineStyle(7,0x9b82ff,0.9).drawCircle(0,0,42).beginFill(0x8264ff,0.25).drawCircle(0,0,25).endFill();const label=new PIXI.Text(p.label||'포탈',{fontFamily:'system-ui',fontSize:13,fontWeight:'900',fill:0xffffff,stroke:0x27183e,strokeThickness:4});label.anchor.set(.5,1);label.position.set(0,-52);node.addChild(ring,label);node.ring=ring;portalLayer.addChild(node);}
+}
 function createHpBar(width){const c=new PIXI.Container(),bg=new PIXI.Graphics().beginFill(0x151515,0.85).drawRoundedRect(-width/2,0,width,7,3).endFill(),bar=new PIXI.Graphics();c.addChild(bg,bar);c.bar=bar;c.widthValue=width;return c;}
 function makePlayerNode(p){const c=new PIXI.Container();c.sortableChildren=true;const sprite=new PIXI.Sprite(PIXI.Texture.EMPTY);sprite.zIndex=1;sprite.position.y=30;c.addChild(sprite);const hp=createHpBar(62);hp.position.y=-103;hp.zIndex=3;c.addChild(hp);const label=new PIXI.Text('',{fontFamily:'system-ui',fontSize:11,fontWeight:'700',fill:0xffffff,stroke:0x111111,strokeThickness:3});label.anchor.set(.5,1);label.position.y=-76;label.zIndex=4;c.addChild(label);c.sprite=sprite;c.hp=hp;c.label=label;c.lastFrame='';c.position.set(p.x,p.y);playerLayer.addChild(c);playerNodes.set(p.id,c);playerTargets.set(p.id,{x:p.x,y:p.y});return c;}
 function updatePlayerNode(p,dt){let c=playerNodes.get(p.id);if(!c)c=makePlayerNode(p);let t=playerTargets.get(p.id);t.x=p.x;t.y=p.y;c.x+=(t.x-c.x)*Math.min(1,dt*14);c.y+=(t.y-c.y)*Math.min(1,dt*14);c.visible=p.alive;const row=directionRow(p.direction),col=walkFrame(p),key=p.avatar+':'+row+':'+col;if(c.lastFrame!==key){c.lastFrame=key;if(p.avatar==='pirate'&&pirateTextures){const f=PIRATE_FRAMES[row][col];c.sprite.texture=pirateTextures[row][col];c.sprite.scale.set(.39);c.sprite.anchor.set(f.anchorX/f.w,1);}else if(mageTextures){c.sprite.texture=mageTextures[row][col];c.sprite.scale.set(.43);c.sprite.anchor.set(.5,1);}}const hp=Math.max(0,p.hp/p.maxHp),bar=c.hp.bar;bar.clear().beginFill(hp>.45?0x70e27d:0xff6565).drawRoundedRect(-29,1,58*hp,4,2).endFill();c.label.text=p.id===myId?'YOU':'P-'+p.id.slice(0,4);c.label.style.fill=p.id===myId?0xffe082:0xffffff;}
@@ -841,6 +1043,7 @@ app.ticker.maxFPS=60;app.ticker.add(()=>{const dt=Math.min(app.ticker.deltaMS/10
 server.listen(PORT, () => {
   console.log('Forest RPG running on port ' + PORT);
   console.log('Renderer: PixiJS/WebGL');
+  console.log('Forest: detailed plaza / rivers / bridges / cliffs / collision');
   console.log('Physics ' + PHYSICS_RATE + 'Hz / network ' + NETWORK_RATE + 'Hz / AI ' + MONSTER_AI_RATE + 'Hz');
   console.log('Spatial grid ' + GRID_SIZE + 'px / view ' + VIEW_RADIUS + 'px / active AI ' + MONSTER_ACTIVE_RADIUS + 'px');
   console.log('Slimes ' + NORMAL_SLIMES + ' normal + ' + ELITE_SLIMES + ' elite');
