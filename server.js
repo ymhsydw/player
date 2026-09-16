@@ -1,6 +1,8 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const crypto = require('crypto');
+const { Pool } = require('pg');
 const { Server } = require('socket.io');
 
 const app = express();
@@ -8,6 +10,15 @@ const server = http.createServer(app);
 const io = new Server(server, { transports: ['websocket', 'polling'] });
 const PORT = process.env.PORT || 3000;
 // ARCHER_SKILLS_PATCH_V1
+// LOGIN_BOARD_PERSISTENCE_V1
+
+const BOARD = { map: 'village', x: 1300, y: 650, range: 165 };
+const DATABASE_URL = process.env.DATABASE_URL || '';
+const pool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+let dbReady = false;
+let latestBoardPostId = 0;
+let memoryBoardPosts = [];
+let nextMemoryPostId = 1;
 
 const MAPS = {
   forest: {
@@ -262,6 +273,120 @@ const CHAIN_AIM_DOT = Math.cos(Math.PI / 4);
 const PORTAL_USE_RANGE = 140;
 const PORTAL_COOLDOWN = 900;
 
+
+function validNickname(value) {
+  return /^[\p{L}\p{N}_-]{2,16}$/u.test(String(value || '').trim());
+}
+function validPassword(value) {
+  const v = String(value || '');
+  return v.length >= 4 && v.length <= 72;
+}
+function hashPassword(password) {
+  return new Promise((resolve, reject) => {
+    const salt = crypto.randomBytes(16).toString('hex');
+    crypto.scrypt(String(password), salt, 64, (err, key) => {
+      if (err) return reject(err);
+      resolve(salt + ':' + key.toString('hex'));
+    });
+  });
+}
+function verifyPassword(password, stored) {
+  return new Promise((resolve) => {
+    const parts = String(stored || '').split(':');
+    if (parts.length !== 2) return resolve(false);
+    crypto.scrypt(String(password), parts[0], 64, (err, key) => {
+      if (err) return resolve(false);
+      try {
+        const a = Buffer.from(parts[1], 'hex');
+        const b = Buffer.from(key);
+        resolve(a.length === b.length && crypto.timingSafeEqual(a, b));
+      } catch { resolve(false); }
+    });
+  });
+}
+async function initPersistence() {
+  if (!pool) {
+    console.log('DATABASE_URL not set: login persistence disabled; board memory fallback');
+    return;
+  }
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS game_users (
+      id BIGSERIAL PRIMARY KEY,
+      nickname VARCHAR(16) UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      play_seconds BIGINT NOT NULL DEFAULT 0,
+      last_seen_post_id BIGINT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_login TIMESTAMPTZ
+    )`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS board_posts (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT REFERENCES game_users(id) ON DELETE SET NULL,
+      nickname VARCHAR(16) NOT NULL,
+      title VARCHAR(40) NOT NULL,
+      content VARCHAR(500) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    const r = await pool.query('SELECT COALESCE(MAX(id), 0) AS id FROM board_posts');
+    latestBoardPostId = Number(r.rows[0].id || 0);
+    dbReady = true;
+    console.log('PostgreSQL persistence ready');
+  } catch (err) {
+    dbReady = false;
+    console.error('PostgreSQL init failed:', err.message);
+  }
+}
+function currentPlaySeconds(p) {
+  if (!p || !p.userId) return 0;
+  return Math.max(0, Math.floor(Number(p.persistedPlaySeconds || 0) + (Date.now() - Number(p.playSessionStartedAt || Date.now())) / 1000));
+}
+async function savePlayerProgress(p) {
+  if (!dbReady || !p || !p.userId) return;
+  const total = currentPlaySeconds(p);
+  await pool.query('UPDATE game_users SET play_seconds=$1, last_seen_post_id=$2 WHERE id=$3', [total, Number(p.boardSeenId || 0), p.userId]);
+  p.persistedPlaySeconds = total;
+  p.playSessionStartedAt = Date.now();
+}
+async function getBoardPosts(limit = 50) {
+  if (dbReady) {
+    const r = await pool.query('SELECT id,nickname,title,content,created_at FROM board_posts ORDER BY id DESC LIMIT $1', [limit]);
+    return r.rows.reverse().map(row => ({ id:Number(row.id), nickname:row.nickname, title:row.title, content:row.content, createdAt:new Date(row.created_at).toISOString() }));
+  }
+  return memoryBoardPosts.slice(-limit);
+}
+async function insertBoardPost(p, title, content) {
+  if (dbReady) {
+    const r = await pool.query('INSERT INTO board_posts(user_id,nickname,title,content) VALUES($1,$2,$3,$4) RETURNING id,nickname,title,content,created_at', [p.userId || null, p.nickname, title, content]);
+    const row = r.rows[0];
+    latestBoardPostId = Number(row.id);
+    return { id:Number(row.id), nickname:row.nickname, title:row.title, content:row.content, createdAt:new Date(row.created_at).toISOString() };
+  }
+  const post = { id: nextMemoryPostId++, nickname:p.nickname, title, content, createdAt:new Date().toISOString() };
+  memoryBoardPosts.push(post);
+  if (memoryBoardPosts.length > 100) memoryBoardPosts = memoryBoardPosts.slice(-100);
+  latestBoardPostId = post.id;
+  return post;
+}
+async function markBoardSeen(p, id) {
+  p.boardSeenId = Math.max(Number(p.boardSeenId || 0), Number(id || 0));
+  if (dbReady && p.userId) await pool.query('UPDATE game_users SET last_seen_post_id=$1 WHERE id=$2', [p.boardSeenId, p.userId]);
+}
+function playerNearBoard(p) {
+  return !!(p && p.map === BOARD.map && Math.hypot(p.x - BOARD.x, p.y - BOARD.y) <= BOARD.range);
+}
+async function attachAccount(p, socket, user) {
+  const already = [...players.values()].some(other => other.id !== p.id && other.userId && Number(other.userId) === Number(user.id));
+  if (already) return socket.emit('authResult', { ok:false, message:'이미 접속 중인 계정입니다.' });
+  if (p.userId) await savePlayerProgress(p).catch(() => {});
+  p.userId = Number(user.id);
+  p.nickname = user.nickname;
+  p.persistedPlaySeconds = Number(user.play_seconds || 0);
+  p.playSessionStartedAt = Date.now();
+  p.boardSeenId = Number(user.last_seen_post_id || 0);
+  if (dbReady) await pool.query('UPDATE game_users SET last_login=NOW() WHERE id=$1', [p.userId]);
+  socket.emit('authResult', { ok:true, nickname:p.nickname, loggedIn:true, playSeconds:currentPlaySeconds(p) });
+}
+
 const players = new Map();
 const slimes = new Map();
 const soulFires = new Map();
@@ -369,7 +494,7 @@ function playerForestSafeSpawn() {
 function makePlayer(id) {
   const p = playerForestSafeSpawn();
   return {
-    id, map: 'forest', x: p.x, y: p.y,
+    id, nickname: 'Guest-' + id.slice(0, 4).toUpperCase(), userId: null, persistedPlaySeconds: 0, playSessionStartedAt: Date.now(), boardSeenId: latestBoardPostId, lastBoardPostAt: 0, map: 'forest', x: p.x, y: p.y,
     inputX: 0, inputY: 0, aimX: 0, aimY: 1,
     direction: 'front', moving: false, avatar: 'mage',
     hp: PLAYER_MAX_HP, maxHp: PLAYER_MAX_HP, alive: true, respawnAt: 0,
@@ -828,7 +953,7 @@ function usePortal(p) {
 }
 
 function serializePlayer(p) {
-  return { id: p.id, map: p.map, x: p.x, y: p.y, direction: p.direction, moving: p.moving, avatar: p.avatar, hp: p.hp, maxHp: p.maxHp, alive: p.alive, ghostShip: p.ghostShipUntil > Date.now(), ghostDirX: p.ghostDirX, ghostDirY: p.ghostDirY };
+  return { id: p.id, nickname: p.nickname, map: p.map, x: p.x, y: p.y, direction: p.direction, moving: p.moving, avatar: p.avatar, hp: p.hp, maxHp: p.maxHp, alive: p.alive, ghostShip: p.ghostShipUntil > Date.now(), ghostDirX: p.ghostDirX, ghostDirY: p.ghostDirY };
 }
 function near(viewer, x, y, radius = VIEW_RADIUS) {
   const dx = x - viewer.x, dy = y - viewer.y;
@@ -862,7 +987,9 @@ function stateForPlayer(viewer) {
     map: viewer.map, mapName: map.name, world: { width: map.width, height: map.height },
     safe: isPlayerSafe(viewer), portals: map.portals,
     players: playerState, slimes: slimeState, soulFires: fires,
-    bossProgress, bossTarget: BOSS_TARGET, bossActive: bossId !== null
+    bossProgress, bossTarget: BOSS_TARGET, bossActive: bossId !== null,
+    profile: { nickname: viewer.nickname, loggedIn: !!viewer.userId, playSeconds: currentPlaySeconds(viewer) },
+    board: viewer.map === BOARD.map ? { x: BOARD.x, y: BOARD.y, hasNew: latestBoardPostId > Number(viewer.boardSeenId || 0) } : null
   };
 }
 
@@ -878,7 +1005,7 @@ io.on('connection', socket => {
   socket.join(roomFor('forest'));
 
   socket.emit('welcome', {
-    id: p.id, map: p.map, mapName: MAPS.forest.name,
+    id: p.id, nickname: p.nickname, loggedIn: false, playSeconds: 0, map: p.map, mapName: MAPS.forest.name,
     world: { width: MAPS.forest.width, height: MAPS.forest.height }, portals: MAPS.forest.portals,
     safeZone: MAPS.forest.safeZone, maxPlayers: MAX_PLAYERS,
     soulFireCooldown: SOUL_FIRE_COOLDOWN, slashCooldown: SLASH_COOLDOWN, chainCooldown: CHAIN_COOLDOWN, tripleArrowCooldown: TRIPLE_ARROW_COOLDOWN, arrowRainCooldown: ARROW_RAIN_COOLDOWN, ghostShipCooldown: GHOST_SHIP_COOLDOWN,
@@ -886,6 +1013,52 @@ io.on('connection', socket => {
   });
 
   io.emit('count', { current: players.size, max: MAX_PLAYERS });
+
+  socket.on('register', async data => {
+    if (!dbReady) return socket.emit('authResult', { ok:false, message:'저장 DB가 연결되지 않았습니다.' });
+    const nickname = String(data && data.nickname || '').trim();
+    const password = String(data && data.password || '');
+    if (!validNickname(nickname)) return socket.emit('authResult', { ok:false, message:'닉네임은 2~16자 한글/영문/숫자/_/- 만 사용할 수 있습니다.' });
+    if (!validPassword(password)) return socket.emit('authResult', { ok:false, message:'비밀번호는 4~72자로 입력하세요.' });
+    try {
+      const passwordHash = await hashPassword(password);
+      const r = await pool.query('INSERT INTO game_users(nickname,password_hash,last_seen_post_id,last_login) VALUES($1,$2,$3,NOW()) RETURNING *', [nickname, passwordHash, latestBoardPostId]);
+      await attachAccount(p, socket, r.rows[0]);
+    } catch (err) {
+      socket.emit('authResult', { ok:false, message: err && err.code === '23505' ? '이미 사용 중인 닉네임입니다.' : '회원가입에 실패했습니다.' });
+    }
+  });
+  socket.on('login', async data => {
+    if (!dbReady) return socket.emit('authResult', { ok:false, message:'저장 DB가 연결되지 않았습니다.' });
+    const nickname = String(data && data.nickname || '').trim();
+    const password = String(data && data.password || '');
+    try {
+      const r = await pool.query('SELECT * FROM game_users WHERE nickname=$1 LIMIT 1', [nickname]);
+      if (!r.rows[0] || !(await verifyPassword(password, r.rows[0].password_hash))) return socket.emit('authResult', { ok:false, message:'닉네임 또는 비밀번호가 맞지 않습니다.' });
+      await attachAccount(p, socket, r.rows[0]);
+    } catch { socket.emit('authResult', { ok:false, message:'로그인에 실패했습니다.' }); }
+  });
+  socket.on('logout', async () => {
+    if (p.userId) await savePlayerProgress(p).catch(() => {});
+    p.userId = null;
+    p.nickname = 'Guest-' + p.id.slice(0, 4).toUpperCase();
+    p.persistedPlaySeconds = 0; p.playSessionStartedAt = Date.now(); p.boardSeenId = latestBoardPostId;
+    socket.emit('authResult', { ok:true, nickname:p.nickname, loggedIn:false, playSeconds:0 });
+  });
+  socket.on('openBoard', async () => {
+    if (!playerNearBoard(p)) return;
+    try { const posts = await getBoardPosts(50); await markBoardSeen(p, latestBoardPostId); socket.emit('boardData', { posts, latestId: latestBoardPostId, persistent: dbReady }); }
+    catch { socket.emit('boardError', { message:'게시판을 불러오지 못했습니다.' }); }
+  });
+  socket.on('createBoardPost', async data => {
+    if (!playerNearBoard(p)) return;
+    const now = Date.now();
+    if (now - Number(p.lastBoardPostAt || 0) < 5000) return socket.emit('boardPostResult', { ok:false, message:'글은 5초에 한 번 작성할 수 있습니다.' });
+    const title = String(data && data.title || '').trim().slice(0, 40), content = String(data && data.content || '').trim().slice(0, 500);
+    if (!title || !content) return socket.emit('boardPostResult', { ok:false, message:'제목과 내용을 입력하세요.' });
+    try { p.lastBoardPostAt = now; const post = await insertBoardPost(p, title, content); await markBoardSeen(p, post.id); socket.emit('boardPostResult', { ok:true, post }); emitMap('village', 'boardNewPost', { id: post.id, nickname: post.nickname }); }
+    catch { socket.emit('boardPostResult', { ok:false, message:'글 저장에 실패했습니다.' }); }
+  });
 
   socket.on('input', data => {
     if (!p.alive) return;
@@ -937,12 +1110,14 @@ io.on('connection', socket => {
   });
 
   socket.on('disconnect', () => {
+    if (p.userId) savePlayerProgress(p).catch(() => {});
     players.delete(p.id);
     io.emit('count', { current: players.size, max: MAX_PLAYERS });
   });
 });
 
 setInterval(() => updateMonsterAI(Date.now()), 1000 / MONSTER_AI_RATE);
+setInterval(() => { for (const p of players.values()) if (p.userId) savePlayerProgress(p).catch(() => {}); }, 30000);
 
 let lastPhysics = Date.now();
 setInterval(() => {
@@ -1075,6 +1250,7 @@ app.get('/', (_req, res) => {
 #clearMessage{position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.4);pointer-events:none}
 #clearTitle{color:#ffe477;font-size:clamp(60px,11vw,140px);font-weight:1000;text-shadow:0 5px 20px #000}#clearSub{color:#fff;text-align:center;font-size:20px;font-weight:900}
 .death{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:900;display:none;padding:16px 25px;border-radius:15px;background:rgba(90,10,20,.88);border:2px solid rgba(255,100,110,.85);color:#fff;font-size:22px;font-weight:1000;pointer-events:none}.death.active{display:block}
+#accountBar{position:fixed;left:220px;top:10px;z-index:70;display:flex;align-items:center;gap:8px;color:#fff;background:rgba(8,14,8,.86);border:1px solid rgba(255,255,255,.15);border-radius:11px;padding:8px 10px;font-size:12px}#accountBar button,#authPanel button,#boardPanel button{border:1px solid rgba(255,255,255,.2);border-radius:8px;background:#304b33;color:#fff;padding:7px 10px;font-weight:800;cursor:pointer}#playtimeText{color:#ffe49b;font-weight:900}.modalPanel{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1200;display:none;background:rgba(17,24,18,.97);color:#fff;border:2px solid rgba(170,230,180,.45);border-radius:16px;box-shadow:0 18px 60px rgba(0,0,0,.45)}#authPanel{width:min(390px,92vw);padding:18px}#authPanel h3,#boardPanel h3{margin:0 0 12px}#authPanel input,#boardPanel input,#boardPanel textarea{width:100%;border:1px solid rgba(255,255,255,.18);border-radius:9px;background:#172219;color:#fff;padding:10px;margin:5px 0;font:inherit}#authMessage,#boardMessage{min-height:18px;color:#ffd27f;font-size:12px;margin-top:7px}.rowButtons{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}#boardPanel{width:min(650px,94vw);height:min(650px,88vh);padding:16px;overflow:hidden}#boardPosts{height:55%;overflow:auto;background:rgba(0,0,0,.18);border-radius:10px;padding:8px;margin-bottom:9px}.boardPost{padding:9px;border-bottom:1px solid rgba(255,255,255,.1)}.boardMeta{font-size:11px;color:#b9c6b9}.boardTitle{font-weight:900;color:#ffe49b;margin:3px 0}.boardContent{white-space:pre-wrap;word-break:break-word;font-size:13px}#boardClose{position:absolute;right:12px;top:10px;background:#65383b!important}
 @media(pointer:fine){.joyZone,#chainBtn,#portalBtn{display:none!important}}@media(max-width:700px){#avatarPanel{width:165px}#bossLocator{top:64px;min-width:210px}#zoneStatus{font-size:10px}#portalPrompt{bottom:195px}}
 </style>
 </head>
@@ -1083,7 +1259,7 @@ app.get('/', (_req, res) => {
 <div id="clearMessage"><div><div id="clearTitle">CLEAR!</div><div id="clearSub">👑 보스 슬라임 처치 완료</div></div></div>
 <div id="deathMessage" class="death">쓰러졌습니다</div>
 <div id="hud"><div id="status">서버 연결 중...</div><div>접속자: <span id="count">0</span>/<span id="maxCount">20</span>명</div><div>맵: <span id="mapName">숲</span></div><div>HP: <span id="hpText">100 / 100</span></div><div>캐릭터: <span id="currentAvatarName">마법사</span></div><div>E: <span id="skillName">영혼불</span></div><div>Q: <span id="chainState">체인 라이트닝</span></div><div>상태: <span id="skillState">대기</span></div><div>보스 게이지: <span id="bossProgress">0 / 20</span></div></div>
-<div id="bossLocator"></div><div id="zoneStatus">🛡️ 안전 지대<small>PVP / 몬스터 공격 불가 · HP 회복</small></div>
+<div id="accountBar"><b id="nicknameText">Guest</b><span>플레이타임 <span id="playtimeText">00:00:00</span></span><button id="accountBtn" type="button">로그인</button></div><div id="authPanel" class="modalPanel"><h3>계정</h3><input id="authNickname" maxlength="16" placeholder="닉네임"><input id="authPassword" maxlength="72" type="password" placeholder="비밀번호"><div class="rowButtons"><button id="loginBtn" type="button">로그인</button><button id="registerBtn" type="button">회원가입</button><button id="logoutBtn" type="button">로그아웃</button><button id="guestBtn" type="button">Guest로 계속</button></div><div id="authMessage"></div></div><div id="boardPanel" class="modalPanel"><button id="boardClose" type="button">닫기</button><h3>마을 게시판</h3><div id="boardPosts"></div><input id="boardTitleInput" maxlength="40" placeholder="제목"><textarea id="boardContentInput" maxlength="500" rows="4" placeholder="내용"></textarea><div class="rowButtons"><button id="boardWriteBtn" type="button">글쓰기</button></div><div id="boardMessage"></div></div><div id="bossLocator"></div><div id="zoneStatus">🛡️ 안전 지대<small>PVP / 몬스터 공격 불가 · HP 회복</small></div>
 <div id="avatarPanel"><div id="avatarTitle">캐릭터 선택</div><div id="avatarGrid"><button class="avatarBtn selected" data-avatar="mage" type="button"><b>🔮 마법사</b><span>E 영혼불 · Q 체인</span></button><button class="avatarBtn" data-avatar="pirate" type="button"><b>🏴‍☠️ 해적</b><span>E 슬래시 · Q 유령해적선</span></button><button class="avatarBtn" data-avatar="archer" type="button"><b>🏹 궁수</b><span>E 3연발 · Q 화살비</span></button></div></div>
 <div id="moveJoy" class="joyZone"><div id="moveKnob" class="joyKnob"></div></div>
 <div id="attackJoy" class="joyZone"><div id="attackLabel">영혼불</div><div id="attackKnob" class="joyKnob"></div></div>
@@ -1096,6 +1272,9 @@ app.get('/', (_req, res) => {
 const FOREST_LAYOUT=${JSON.stringify(FOREST_LAYOUT)};
 const E=id=>document.getElementById(id);
 const host=E('gameHost'),statusEl=E('status'),countEl=E('count'),maxCountEl=E('maxCount'),mapNameEl=E('mapName'),hpTextEl=E('hpText'),currentAvatarNameEl=E('currentAvatarName'),skillNameEl=E('skillName'),chainStateEl=E('chainState'),skillStateEl=E('skillState'),bossProgressEl=E('bossProgress'),bossLocatorEl=E('bossLocator'),zoneStatusEl=E('zoneStatus'),clearMessageEl=E('clearMessage'),deathMessageEl=E('deathMessage'),moveJoy=E('moveJoy'),moveKnob=E('moveKnob'),attackJoy=E('attackJoy'),attackKnob=E('attackKnob'),attackLabel=E('attackLabel'),chainBtn=E('chainBtn'),portalPrompt=E('portalPrompt'),portalBtn=E('portalBtn'),avatarButtons=[...document.querySelectorAll('.avatarBtn')];
+const accountBar=E('accountBar'),nicknameText=E('nicknameText'),playtimeText=E('playtimeText'),accountBtn=E('accountBtn'),authPanel=E('authPanel'),authNickname=E('authNickname'),authPassword=E('authPassword'),loginBtn=E('loginBtn'),registerBtn=E('registerBtn'),logoutBtn=E('logoutBtn'),guestBtn=E('guestBtn'),authMessage=E('authMessage'),boardPanel=E('boardPanel'),boardPosts=E('boardPosts'),boardClose=E('boardClose'),boardTitleInput=E('boardTitleInput'),boardContentInput=E('boardContentInput'),boardWriteBtn=E('boardWriteBtn'),boardMessage=E('boardMessage');
+const BOARD_CLIENT={x:1300,y:650,range:165};
+let currentBoard=null,boardNoticeText=null,profileLoggedIn=false;
 if(!window.PIXI){statusEl.textContent='PixiJS 로드 실패';return;}
 const coarse=matchMedia('(pointer:coarse)').matches;
 const lowPower=coarse||((navigator.hardwareConcurrency||8)<=4);
@@ -1133,11 +1312,13 @@ function buildMap(){
     g.beginFill(0x93c75f,0.16).lineStyle(5,0xc9ffb8,0.55).drawCircle(forestSafeZone.x,forestSafeZone.y,forestSafeZone.radius).endFill();
     if(!lowPower){for(let i=0;i<150;i++){const x=(i*977+333)%world.width,y=(i*557+911)%world.height;if(Math.hypot(x-c.x,y-c.y)>Math.max(c.rx,c.ry)*1.02)continue;g.beginFill([0xffe082,0xff9e9e,0xc9a3ff,0x9ee7ff][i%4],0.9).drawCircle(x,y,2+(i%2)).endFill();}}
   }else if(currentMap==='village'){
-    g.beginFill(0xc9b98b).drawRect(0,0,world.width,world.height).endFill();g.beginFill(0xb9ad88).drawCircle(1300,950,330).endFill();const houses=[[520,430,250,170,0x994c45],[1000,340,260,180,0x7d5144],[1590,350,250,170,0x995d3f],[2100,470,270,185,0x81505d],[470,1320,260,180,0x84543e],[1030,1460,250,170,0x9a5548],[1620,1470,260,180,0x7d5144],[2140,1310,250,170,0x995d3f]];for(const h of houses){const x=h[0],y=h[1],w=h[2],hh=h[3],roof=h[4];g.beginFill(0xead6aa).drawRect(x-w/2,y-hh/2,w,hh).endFill();g.beginFill(roof).moveTo(x-w/2-14,y-hh/2+5).lineTo(x,y-hh/2-52).lineTo(x+w/2+14,y-hh/2+5).closePath().endFill();g.beginFill(0x7b4f2b).drawRect(x-16,y+hh/2-48,32,48).endFill();}
+    g.beginFill(0xc9b98b).drawRect(0,0,world.width,world.height).endFill();g.beginFill(0xb9ad88).drawCircle(1300,950,330).endFill();const houses=[[520,430,250,170,0x994c45],[1000,340,260,180,0x7d5144],[1590,350,250,170,0x995d3f],[2100,470,270,185,0x81505d],[470,1320,260,180,0x84543e],[1030,1460,250,170,0x9a5548],[1620,1470,260,180,0x7d5144],[2140,1310,250,170,0x995d3f]];for(const h of houses){const x=h[0],y=h[1],w=h[2],hh=h[3],roof=h[4];g.beginFill(0xead6aa).drawRect(x-w/2,y-hh/2,w,hh).endFill();g.beginFill(roof).moveTo(x-w/2-14,y-hh/2+5).lineTo(x,y-hh/2-52).lineTo(x+w/2+14,y-hh/2+5).closePath().endFill();g.beginFill(0x7b4f2b).drawRect(x-16,y+hh/2-48,32,48).endFill();}g.beginFill(0x5a3b24).drawRect(BOARD_CLIENT.x-58,BOARD_CLIENT.y-42,116,84).endFill();g.beginFill(0x8a6036).drawRect(BOARD_CLIENT.x-50,BOARD_CLIENT.y-35,100,63).endFill();g.beginFill(0x4b321f).drawRect(BOARD_CLIENT.x-42,BOARD_CLIENT.y+28,12,55).drawRect(BOARD_CLIENT.x+30,BOARD_CLIENT.y+28,12,55).endFill();
   }else{
     g.beginFill(0x61564e).drawRect(0,0,world.width,world.height).endFill();g.beginFill(0x786b60).lineStyle(10,0xd4c19a).drawRect(180,180,world.width-360,world.height-360).endFill();g.lineStyle(3,0xffffff,0.15).drawCircle(world.width/2,world.height/2,270).moveTo(world.width/2-420,world.height/2).lineTo(world.width/2+420,world.height/2);
   }
   staticLayer.addChild(g);
+  boardNoticeText=null;
+  if(currentMap==='village'){const bt=new PIXI.Text('게시판',{fontFamily:'system-ui',fontSize:15,fontWeight:'900',fill:0xffffff,stroke:0x2a1a10,strokeThickness:4});bt.anchor.set(.5,1);bt.position.set(BOARD_CLIENT.x,BOARD_CLIENT.y-48);staticLayer.addChild(bt);boardNoticeText=new PIXI.Text('!',{fontFamily:'system-ui',fontSize:42,fontWeight:'1000',fill:0xffe14f,stroke:0x5b1e10,strokeThickness:6});boardNoticeText.anchor.set(.5,1);boardNoticeText.position.set(BOARD_CLIENT.x,BOARD_CLIENT.y-78);boardNoticeText.visible=!!(currentBoard&&currentBoard.hasNew);staticLayer.addChild(boardNoticeText);}
   if(currentMap==='forest'){const label=new PIXI.Text('중앙 광장 · 안전지대',{fontFamily:'system-ui',fontSize:24,fontWeight:'900',fill:0xe9ffd5,stroke:0x27421f,strokeThickness:5});label.anchor.set(.5);label.position.set(FOREST_LAYOUT.clearing.x,FOREST_LAYOUT.clearing.y-510);staticLayer.addChild(label);}
   for(const p of currentPortals){const node=new PIXI.Container();node.position.set(p.x,p.y);node.portal=p;const ring=new PIXI.Graphics().lineStyle(7,0x9b82ff,0.9).drawCircle(0,0,42).beginFill(0x8264ff,0.25).drawCircle(0,0,25).endFill();const label=new PIXI.Text(p.label||'포탈',{fontFamily:'system-ui',fontSize:13,fontWeight:'900',fill:0xffffff,stroke:0x27183e,strokeThickness:4});label.anchor.set(.5,1);label.position.set(0,-52);node.addChild(ring,label);node.ring=ring;portalLayer.addChild(node);}
 }
@@ -1158,7 +1339,7 @@ function updatePlayerNode(p,dt){
   const row=directionRow(p.direction),col=walkFrame(p),key=p.avatar+':'+row+':'+col;
   if(c.lastFrame!==key){c.lastFrame=key;if(p.avatar==='archer'&&archerTextures){c.sprite.texture=archerTextures[row][col];c.sprite.scale.set(.38);c.sprite.anchor.set(.5,1);}else if(p.avatar==='pirate'&&pirateTextures){const f=PIRATE_FRAMES[row][col];c.sprite.texture=pirateTextures[row][col];c.sprite.scale.set(.39);c.sprite.anchor.set(f.anchorX/f.w,1);}else if(mageTextures){c.sprite.texture=mageTextures[row][col];c.sprite.scale.set(.43);c.sprite.anchor.set(.5,1);}}
   c.ghostShip.visible=!!p.ghostShip;if(p.ghostShip)c.ghostShip.rotation=Math.atan2(p.ghostDirY||0,p.ghostDirX||1);
-  const hp=Math.max(0,p.hp/p.maxHp),bar=c.hp.bar;bar.clear().beginFill(hp>.45?0x70e27d:0xff6565).drawRoundedRect(-29,1,58*hp,4,2).endFill();c.label.text=p.id===myId?'YOU':'P-'+p.id.slice(0,4);c.label.style.fill=p.id===myId?0xffe082:0xffffff;
+  const hp=Math.max(0,p.hp/p.maxHp),bar=c.hp.bar;bar.clear().beginFill(hp>.45?0x70e27d:0xff6565).drawRoundedRect(-29,1,58*hp,4,2).endFill();c.label.text=(p.nickname||'Guest')+(p.id===myId?' · YOU':'');c.label.style.fill=p.id===myId?0xffe082:0xffffff;
 }
 function cleanupPlayerNodes(){const keep=new Set(players.map(p=>p.id));for(const [id,c] of playerNodes){if(!keep.has(id)){c.destroy({children:true});playerNodes.delete(id);playerTargets.delete(id);}}}
 function makeSlimeNode(s){const c=new PIXI.Container(),body=new PIXI.Graphics(),aggro=new PIXI.Graphics(),hp=createHpBar(s.boss?170:s.elite?64:44);const r=s.boss?78:s.elite?34:24,color=s.boss?0xb32641:s.elite?0x774dd0:0x58c96f;body.beginFill(color).drawEllipse(0,0,r,r*.78).endFill();body.beginFill(0x151719).drawCircle(-r*.3,-4,s.boss?7:3).drawCircle(r*.3,-4,s.boss?7:3).endFill();if(s.boss){const crown=new PIXI.Text('👑',{fontSize:24});crown.anchor.set(.5,1);crown.position.y=-r+2;body.addChild(crown);}aggro.lineStyle(2,0xff5046,0.65).drawCircle(0,0,r+10);aggro.visible=false;hp.position.y=-r-(s.boss?34:18);c.addChild(body,aggro,hp);c.body=body;c.aggro=aggro;c.hp=hp;c.radius=r;c.position.set(s.x,s.y);slimeLayer.addChild(c);slimeNodes.set(s.id,c);slimeTargets.set(s.id,{x:s.x,y:s.y});return c;}
@@ -1196,10 +1377,10 @@ function attackAim(){return mouseAimActive?(mouseAim()||lastMobileAim):lastMobil
 function castPrimary(a,auto){if(serverFull)return;if(currentSafe){skillStateEl.textContent='🛡️ 안전지대에서는 공격 불가';return;}if(selectedAvatar==='mage'){if(performance.now()<cooldownUntil.mage)return;socket.emit('castSoulFire',{aim:a,autoAim:!!auto});}else if(selectedAvatar==='pirate'){if(performance.now()<cooldownUntil.pirate)return;socket.emit('castSlash',{aim:a,autoAim:!!auto});}else{if(performance.now()<cooldownUntil.archer)return;socket.emit('castTripleArrow',{aim:a,autoAim:!!auto});}}
 function castSecondary(a,auto){if(serverFull||currentSafe)return;if(selectedAvatar==='mage'){if(performance.now()<cooldownUntil.chain)return;socket.emit('castChain',{aim:a,autoAim:!!auto});}else if(selectedAvatar==='pirate'){if(performance.now()<cooldownUntil.pirateQ)return;socket.emit('castGhostShip',{aim:a,autoAim:!!auto});}else{if(performance.now()<cooldownUntil.archerQ)return;socket.emit('castArrowRain',{target:skillTarget(a)});}}function tryPortal(){if(!serverFull)socket.emit('usePortal');}
 socket.on('connect',()=>{if(!serverFull)statusEl.textContent='서버 접속됨';});
-socket.on('welcome',d=>{myId=d.id;currentMap=d.map;currentMapName=d.mapName;world=d.world;currentPortals=d.portals||[];forestSafeZone=d.safeZone;soulFireCooldown=d.soulFireCooldown;slashCooldown=d.slashCooldown;chainCooldown=d.chainCooldown;tripleArrowCooldown=d.tripleArrowCooldown;arrowRainCooldown=d.arrowRainCooldown;ghostShipCooldown=d.ghostShipCooldown;slashRange=d.slashRange;slashHalfAngle=d.slashHalfAngle;maxCountEl.textContent=d.maxPlayers;mapNameEl.textContent=currentMapName;buildMap();setAvatar('mage');});
-socket.on('mapChanged',d=>{currentMap=d.map;currentMapName=d.mapName;world=d.world;currentPortals=d.portals||[];players=[];slimes=[];soulFires=[];for(const c of playerNodes.values())c.destroy({children:true});playerNodes.clear();playerTargets.clear();for(const c of slimeNodes.values())c.destroy({children:true});slimeNodes.clear();slimeTargets.clear();for(const c of projectileNodes.values())c.destroy();projectileNodes.clear();buildMap();mapNameEl.textContent=currentMapName;skillStateEl.textContent=currentMap==='arena'?'⚔️ 결투장 입장':currentMap==='village'?'마을 도착':'숲 도착';});
+socket.on('welcome',d=>{myId=d.id;nicknameText.textContent=d.nickname||'Guest';profileLoggedIn=!!d.loggedIn;currentMap=d.map;currentMapName=d.mapName;world=d.world;currentPortals=d.portals||[];forestSafeZone=d.safeZone;soulFireCooldown=d.soulFireCooldown;slashCooldown=d.slashCooldown;chainCooldown=d.chainCooldown;tripleArrowCooldown=d.tripleArrowCooldown;arrowRainCooldown=d.arrowRainCooldown;ghostShipCooldown=d.ghostShipCooldown;slashRange=d.slashRange;slashHalfAngle=d.slashHalfAngle;maxCountEl.textContent=d.maxPlayers;mapNameEl.textContent=currentMapName;buildMap();setAvatar('mage');});
+socket.on('mapChanged',d=>{boardPanel.style.display='none';currentBoard=null;currentMap=d.map;currentMapName=d.mapName;world=d.world;currentPortals=d.portals||[];players=[];slimes=[];soulFires=[];for(const c of playerNodes.values())c.destroy({children:true});playerNodes.clear();playerTargets.clear();for(const c of slimeNodes.values())c.destroy({children:true});slimeNodes.clear();slimeTargets.clear();for(const c of projectileNodes.values())c.destroy();projectileNodes.clear();buildMap();mapNameEl.textContent=currentMapName;skillStateEl.textContent=currentMap==='arena'?'⚔️ 결투장 입장':currentMap==='village'?'마을 도착':'숲 도착';});
 socket.on('count',d=>{countEl.textContent=d.current;maxCountEl.textContent=d.max;});
-socket.on('state',d=>{currentMap=d.map||currentMap;currentMapName=d.mapName||currentMapName;world=d.world||world;currentPortals=d.portals||currentPortals;currentSafe=!!d.safe;players=d.players||[];slimes=d.slimes||[];soulFires=d.soulFires||[];syncProjectiles();mapNameEl.textContent=currentMapName;const me=getMe();if(me)hpTextEl.textContent=Math.ceil(me.hp)+' / '+me.maxHp;if(currentMap==='forest'&&d.bossActive)bossProgressEl.textContent='👑 보스 전투중';else if(currentMap==='forest')bossProgressEl.textContent=d.bossProgress+' / '+d.bossTarget;else bossProgressEl.textContent='-';updateZoneStatus();});
+socket.on('state',d=>{currentMap=d.map||currentMap;currentMapName=d.mapName||currentMapName;world=d.world||world;currentPortals=d.portals||currentPortals;currentSafe=!!d.safe;players=d.players||[];slimes=d.slimes||[];soulFires=d.soulFires||[];currentBoard=d.board||null;if(d.profile){nicknameText.textContent=d.profile.nickname||'Guest';profileLoggedIn=!!d.profile.loggedIn;playtimeText.textContent=formatPlaytime(d.profile.playSeconds||0);accountBtn.textContent=profileLoggedIn?'계정':'로그인';logoutBtn.style.display=profileLoggedIn?'inline-block':'none';}if(boardNoticeText)boardNoticeText.visible=!!(currentBoard&&currentBoard.hasNew);syncProjectiles();mapNameEl.textContent=currentMapName;const me=getMe();if(me)hpTextEl.textContent=Math.ceil(me.hp)+' / '+me.maxHp;if(currentMap==='forest'&&d.bossActive)bossProgressEl.textContent='👑 보스 전투중';else if(currentMap==='forest')bossProgressEl.textContent=d.bossProgress+' / '+d.bossTarget;else bossProgressEl.textContent='-';updateZoneStatus();});
 socket.on('combatEffect',e=>spawnEffect(e));
 socket.on('bossSpawned',d=>{if(currentMap!=='forest')return;skillStateEl.textContent='👑 보스 슬라임 출현!';bossLocatorEl.style.display='block';bossLocatorEl.textContent='👑 BOSS · X '+Math.round(d.x)+' · Y '+Math.round(d.y);});
 socket.on('bossDefeated',()=>{if(currentMap!=='forest')return;skillStateEl.textContent='🏆 보스 처치!';bossLocatorEl.style.display='none';clearMessageEl.style.display='flex';clearTimeout(clearTimer);clearTimer=setTimeout(()=>{clearMessageEl.style.display='none';skillStateEl.textContent='대기';},3000);});
@@ -1216,12 +1397,18 @@ socket.on('skillCastResult',d=>{
   else if(d.skill==='arrowRain'){cooldownUntil.archerQ=performance.now()+d.cooldown;skillStateEl.textContent='🌧️ 화살비!';}
   else if(d.skill==='ghostShip'){cooldownUntil.pirateQ=performance.now()+d.cooldown;skillStateEl.textContent='👻 유령해적선 돌진!';}
 });
-addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(k)){keys.add(k);e.preventDefault();}if(k==='e'&&!e.repeat){const a=mouseAim()||attackAim();if(a){sendAim(a);castPrimary(a,false);}e.preventDefault();}if(k==='q'&&!e.repeat){const a=mouseAim()||attackAim();if(a){sendAim(a);castSecondary(a,false);}e.preventDefault();}if(k==='f'&&!e.repeat){tryPortal();e.preventDefault();}});
+function formatPlaytime(total){total=Math.max(0,Math.floor(Number(total)||0));const h=String(Math.floor(total/3600)).padStart(2,'0'),m=String(Math.floor(total%3600/60)).padStart(2,'0'),sec=String(total%60).padStart(2,'0');return h+':'+m+':'+sec;}
+function uiOpen(){return authPanel.style.display==='block'||boardPanel.style.display==='block';}
+function nearBoard(){const me=getMe();return !!(me&&currentMap==='village'&&Math.hypot(me.x-BOARD_CLIENT.x,me.y-BOARD_CLIENT.y)<=BOARD_CLIENT.range);}
+function renderBoard(posts){boardPosts.innerHTML='';for(const post of posts||[]){const wrap=document.createElement('div');wrap.className='boardPost';const meta=document.createElement('div');meta.className='boardMeta';meta.textContent=(post.nickname||'Guest')+' · '+new Date(post.createdAt).toLocaleString();const title=document.createElement('div');title.className='boardTitle';title.textContent=post.title||'';const content=document.createElement('div');content.className='boardContent';content.textContent=post.content||'';wrap.append(meta,title,content);boardPosts.appendChild(wrap);}boardPosts.scrollTop=boardPosts.scrollHeight;}
+accountBtn.addEventListener('click',()=>{authPanel.style.display='block';authMessage.textContent='';});guestBtn.addEventListener('click',()=>authPanel.style.display='none');loginBtn.addEventListener('click',()=>socket.emit('login',{nickname:authNickname.value,password:authPassword.value}));registerBtn.addEventListener('click',()=>socket.emit('register',{nickname:authNickname.value,password:authPassword.value}));logoutBtn.addEventListener('click',()=>socket.emit('logout'));boardClose.addEventListener('click',()=>boardPanel.style.display='none');boardWriteBtn.addEventListener('click',()=>socket.emit('createBoardPost',{title:boardTitleInput.value,content:boardContentInput.value}));
+socket.on('authResult',d=>{authMessage.textContent=d.message||'';if(d.ok){profileLoggedIn=!!d.loggedIn;nicknameText.textContent=d.nickname||'Guest';playtimeText.textContent=formatPlaytime(d.playSeconds||0);accountBtn.textContent=profileLoggedIn?'계정':'로그인';logoutBtn.style.display=profileLoggedIn?'inline-block':'none';authPanel.style.display='none';}});socket.on('boardData',d=>{renderBoard(d.posts);boardMessage.textContent=d.persistent?'':'현재 DB 미연결: 서버 재시작 시 글이 초기화됩니다.';boardPanel.style.display='block';if(currentBoard)currentBoard.hasNew=false;if(boardNoticeText)boardNoticeText.visible=false;});socket.on('boardPostResult',d=>{boardMessage.textContent=d.message||'';if(d.ok){boardTitleInput.value='';boardContentInput.value='';socket.emit('openBoard');}});socket.on('boardError',d=>{boardMessage.textContent=d.message||'게시판 오류';});socket.on('boardNewPost',()=>{if(currentMap==='village'&&boardPanel.style.display!=='block'){if(!currentBoard)currentBoard={x:BOARD_CLIENT.x,y:BOARD_CLIENT.y,hasNew:true};else currentBoard.hasNew=true;if(boardNoticeText)boardNoticeText.visible=true;}});
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(k==='escape'){authPanel.style.display='none';boardPanel.style.display='none';return;}if(uiOpen())return;if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(k)){keys.add(k);e.preventDefault();}if(k==='e'&&!e.repeat){const a=mouseAim()||attackAim();if(a){sendAim(a);castPrimary(a,false);}e.preventDefault();}if(k==='q'&&!e.repeat){const a=mouseAim()||attackAim();if(a){sendAim(a);castSecondary(a,false);}e.preventDefault();}if(k==='f'&&!e.repeat){if(nearBoard())socket.emit('openBoard');else tryPortal();e.preventDefault();}});
 addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));app.view.addEventListener('pointermove',e=>{if(e.pointerType!=='mouse'&&e.pointerType!=='pen')return;mouseX=e.clientX;mouseY=e.clientY;mouseAimActive=true;const a=mouseAim();if(a)sendAim(a);});portalBtn.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();tryPortal();});
 function joyVector(el,x,y,dz){const r=el.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,m=r.width*.34;let dx=x-cx,dy=y-cy;const raw=Math.hypot(dx,dy);if(raw>m){dx=dx/raw*m;dy=dy/raw*m;}const amount=Math.min(1,raw/m);let nx=dx/m,ny=dy/m;if(amount<dz){nx=0;ny=0;}return{dx,dy,nx,ny,amount};}function setKnob(k,x,y){k.style.transform='translate('+x+'px,'+y+'px)';}
 moveJoy.addEventListener('pointerdown',e=>{movePointerId=e.pointerId;moveJoy.setPointerCapture(e.pointerId);const v=joyVector(moveJoy,e.clientX,e.clientY,.12);moveX=v.nx;moveY=v.ny;setKnob(moveKnob,v.dx,v.dy);});moveJoy.addEventListener('pointermove',e=>{if(e.pointerId!==movePointerId)return;const v=joyVector(moveJoy,e.clientX,e.clientY,.12);moveX=v.nx;moveY=v.ny;setKnob(moveKnob,v.dx,v.dy);});function releaseMove(e){if(e.pointerId!==movePointerId)return;movePointerId=null;moveX=0;moveY=0;setKnob(moveKnob,0,0);}moveJoy.addEventListener('pointerup',releaseMove);moveJoy.addEventListener('pointercancel',releaseMove);
 attackJoy.addEventListener('pointerdown',e=>{attackPointerId=e.pointerId;attackJoy.setPointerCapture(e.pointerId);attackDragging=true;const v=joyVector(attackJoy,e.clientX,e.clientY,0);attackDragAmount=v.amount;setKnob(attackKnob,v.dx,v.dy);if(v.amount>=.08){const a=norm(v.nx,v.ny,lastMobileAim.x,lastMobileAim.y);attackX=a.x;attackY=a.y;lastMobileAim=a;sendAim(a);}});attackJoy.addEventListener('pointermove',e=>{if(e.pointerId!==attackPointerId)return;const v=joyVector(attackJoy,e.clientX,e.clientY,0);attackDragAmount=Math.max(attackDragAmount,v.amount);setKnob(attackKnob,v.dx,v.dy);if(v.amount>=.08){const a=norm(v.nx,v.ny,lastMobileAim.x,lastMobileAim.y);attackX=a.x;attackY=a.y;lastMobileAim=a;sendAim(a);}});function releaseAttack(e){if(e.pointerId!==attackPointerId)return;const manual=attackDragAmount>=.2,a=manual?{x:attackX,y:attackY}:lastMobileAim;attackPointerId=null;attackDragging=false;attackDragAmount=0;setKnob(attackKnob,0,0);castPrimary(a,!manual);}attackJoy.addEventListener('pointerup',releaseAttack);attackJoy.addEventListener('pointercancel',e=>{if(e.pointerId!==attackPointerId)return;attackPointerId=null;attackDragging=false;attackDragAmount=0;setKnob(attackKnob,0,0);});chainBtn.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();const manual=attackDragging&&attackDragAmount>=.2;castSecondary(manual?{x:attackX,y:attackY}:lastMobileAim,!manual);});
-setInterval(()=>{if(serverFull)return;let x=0,y=0;if(keys.has('a')||keys.has('arrowleft'))x--;if(keys.has('d')||keys.has('arrowright'))x++;if(keys.has('w')||keys.has('arrowup'))y--;if(keys.has('s')||keys.has('arrowdown'))y++;if(Math.abs(moveX)>.01||Math.abs(moveY)>.01){x=moveX;y=moveY;}const l=Math.hypot(x,y);if(l>1){x/=l;y/=l;}if(Math.abs(x-lastInputX)>.01||Math.abs(y-lastInputY)>.01){socket.emit('input',{x,y});lastInputX=x;lastInputY=y;}if(mouseAimActive){const a=mouseAim();if(a)sendAim(a);}},40);
+setInterval(()=>{if(serverFull)return;let x=0,y=0;if(uiOpen()){if(lastInputX!==0||lastInputY!==0){socket.emit('input',{x:0,y:0});lastInputX=0;lastInputY=0;}return;}if(keys.has('a')||keys.has('arrowleft'))x--;if(keys.has('d')||keys.has('arrowright'))x++;if(keys.has('w')||keys.has('arrowup'))y--;if(keys.has('s')||keys.has('arrowdown'))y++;if(Math.abs(moveX)>.01||Math.abs(moveY)>.01){x=moveX;y=moveY;}const l=Math.hypot(x,y);if(l>1){x/=l;y/=l;}if(Math.abs(x-lastInputX)>.01||Math.abs(y-lastInputY)>.01){socket.emit('input',{x,y});lastInputX=x;lastInputY=y;}if(mouseAimActive){const a=mouseAim();if(a)sendAim(a);}},40);
 setInterval(()=>{
   let until=0,label='Q';
   if(selectedAvatar==='mage'){until=cooldownUntil.chain;label='⚡<br>체인';}
@@ -1240,11 +1427,12 @@ app.ticker.maxFPS=60;app.ticker.add(()=>{const dt=Math.min(app.ticker.deltaMS/10
 </html>`);
 });
 
-server.listen(PORT, () => {
+initPersistence().finally(() => server.listen(PORT, () => {
   console.log('Forest RPG running on port ' + PORT);
   console.log('Renderer: PixiJS/WebGL');
   console.log('Forest: detailed plaza / rivers / bridges / cliffs / collision');
   console.log('Physics ' + PHYSICS_RATE + 'Hz / network ' + NETWORK_RATE + 'Hz / AI ' + MONSTER_AI_RATE + 'Hz');
   console.log('Spatial grid ' + GRID_SIZE + 'px / view ' + VIEW_RADIUS + 'px / active AI ' + MONSTER_ACTIVE_RADIUS + 'px');
   console.log('Slimes ' + NORMAL_SLIMES + ' normal + ' + ELITE_SLIMES + ' elite');
-});
+  console.log('Accounts/board persistence: ' + (dbReady ? 'PostgreSQL' : 'memory fallback'));
+}));
