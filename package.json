@@ -5,7 +5,7 @@
   "description": "Simple public multiplayer movement prototype",
   "main": "server.js",
   "scripts": {
-    "start": "node scripts/fix-character-assets.js && node scripts/apply-character-skills.js && node server.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "express": "^5.1.0",
