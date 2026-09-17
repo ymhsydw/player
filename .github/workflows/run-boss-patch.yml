@@ -1,0 +1,27 @@
+name: Run boss event patch
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/run-boss-patch.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: python boss_patch.py
+      - run: node --check server.js
+      - run: |
+          rm -f boss_patch.py .github/workflows/run-boss-patch.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server.js boss_patch.py .github/workflows/run-boss-patch.yml
+          git commit -m 'Add staged boss events and mobile interaction fixes'
+          git push origin HEAD:main
