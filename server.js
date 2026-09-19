@@ -24,14 +24,14 @@ let nextMemoryPostId = 1;
 
 const MAPS = {
   forest: {
-    id: 'forest', name: '숲', width: 4800, height: 3600, safeAll: false,
-    safeZone: { x: 2400, y: 1800, radius: 470 },
-    portals: [{ id: 'forest-village', x: 2400, y: 1800, radius: 82, label: '마을 포탈', target: 'village', targetX: 1300, targetY: 1240 }]
+    id: 'forest', name: '숲', width: 4000, height: 3000, safeAll: false,
+    safeZone: { x: 2000, y: 1500, radius: 470 },
+    portals: [{ id: 'forest-village', x: 2000, y: 1500, radius: 82, label: '마을 포탈', target: 'village', targetX: 1300, targetY: 1240 }]
   },
   village: {
     id: 'village', name: '마을', width: 2600, height: 1900, safeAll: true, safeZone: null,
     portals: [
-      { id: 'village-forest', x: 1300, y: 950, radius: 82, label: '숲 포탈', target: 'forest', targetX: 2400, targetY: 2040 },
+      { id: 'village-forest', x: 1300, y: 950, radius: 82, label: '숲 포탈', target: 'forest', targetX: 2000, targetY: 1740 },
       { id: 'village-arena', x: 2050, y: 950, radius: 82, label: '결투장 포탈', target: 'arena', targetX: 1200, targetY: 1260 }
     ]
   },
@@ -507,7 +507,7 @@ function forestSpawnPoint(margin = 160, minDistance = 0) {
     const y = margin + Math.random() * (MAPS.forest.height - margin * 2);
     if (!isPointInForestSafeZone(x, y, 180) && !forestBlocked(x, y, 38)) return { x, y };
   }
-  return { x: 3400, y: 1700 };
+  return { x: MAPS.forest.safeZone.x + 850, y: MAPS.forest.safeZone.y };
 }
 function playerForestSafeSpawn() {
   const z = MAPS.forest.safeZone;
@@ -1367,7 +1367,7 @@ const app=new PIXI.Application({resizeTo:window,backgroundColor:0x182716,antiali
 host.appendChild(app.view);PIXI.settings.ROUND_PIXELS=true;
 const worldRoot=new PIXI.Container(),staticLayer=new PIXI.Container(),portalLayer=new PIXI.Container(),slimeLayer=new PIXI.Container(),playerLayer=new PIXI.Container(),projectileLayer=new PIXI.Container(),effectLayer=new PIXI.Container(),previewLayer=new PIXI.Container();
 worldRoot.addChild(staticLayer,portalLayer,slimeLayer,playerLayer,projectileLayer,effectLayer,previewLayer);app.stage.addChild(worldRoot);
-let myId=null,currentMap='forest',currentMapName='숲',world={width:4800,height:3600},currentPortals=[],forestSafeZone={x:2400,y:1800,radius:470},currentSafe=true;
+let myId=null,currentMap='forest',currentMapName='숲',world={width:4000,height:3000},currentPortals=[],forestSafeZone={x:2000,y:1500,radius:470},currentSafe=true;
 let players=[],slimes=[],soulFires=[],serverFull=false,selectedAvatar='mage',keys=new Set(),cameraX=0,cameraY=0,mouseX=innerWidth/2,mouseY=innerHeight/2,mouseAimActive=false,forestSafeActive=true,bossPhaseClient='grind',forestReturnLocked=false,zoneUnderAttack=false,zoneDestroyAtClient=0,eventDeathsClient=0,maxEventDeathsClient=4,damageBuffClient=1,speedBuffClient=1;
 let movePointerId=null,attackPointerId=null,moveX=0,moveY=0,attackX=0,attackY=1,attackDragAmount=0,attackDragging=false,lastMobileAim={x:0,y:1},lastInputX=999,lastInputY=999,lastAimX=999,lastAimY=999;
 let soulFireCooldown=900,slashCooldown=1000,chainCooldown=4500,tripleArrowCooldown=850,arrowRainCooldown=4800,ghostShipCooldown=6500,slashRange=145,slashHalfAngle=Math.PI/3,cooldownUntil={mage:0,pirate:0,chain:0,archer:0,archerQ:0,pirateQ:0},clearTimer=null,deathTimer=null;
@@ -1377,7 +1377,7 @@ const PIRATE_FRAMES=[[{x:74,y:29,w:249,h:319,anchorX:107},{x:422,y:30,w:229,h:31
 let ARCHER_FRAMES=null;
 let mageTextures=null,pirateTextures=null,archerTextures=null,forestMapTexture=null;
 try{const mageBase=await PIXI.Assets.load('/mage.png?v=121');const pirateBase=await PIXI.Assets.load('/pirate.png?v=121');const archerBase=await PIXI.Assets.load('/archer.png?v=121');const archerCellW=archerBase.width/3,archerCellH=archerBase.height/4;ARCHER_FRAMES=Array.from({length:4},(_,row)=>Array.from({length:3},(_,col)=>({x:col*archerCellW,y:row*archerCellH,w:archerCellW,h:archerCellH})));mageTextures=MAGE_FRAMES.map(row=>row.map(f=>new PIXI.Texture(mageBase.baseTexture,new PIXI.Rectangle(f.x,f.y,f.w,f.h))));pirateTextures=PIRATE_FRAMES.map(row=>row.map(f=>new PIXI.Texture(pirateBase.baseTexture,new PIXI.Rectangle(f.x,f.y,f.w,f.h))));archerTextures=ARCHER_FRAMES.map(row=>row.map(f=>new PIXI.Texture(archerBase.baseTexture,new PIXI.Rectangle(f.x,f.y,f.w,f.h))));}catch(err){statusEl.textContent='캐릭터 이미지 로드 실패';}
-try{forestMapTexture=await PIXI.Assets.load('/forest-map.svg?v=3');}catch(err){console.warn('forest map artwork load failed');}
+try{forestMapTexture=await PIXI.Assets.load('/forest-map.svg?v=5');}catch(err){console.warn('forest map artwork load failed');}
 const socket=io({transports:['websocket','polling']});
 function directionRow(d){return d==='back'?1:d==='left'?2:d==='right'?3:0}function walkFrame(p){return p.moving?Math.floor(performance.now()/145)%3:1}function clampClient(v,a,b){return Math.max(a,Math.min(b,v))}function norm(x,y,fx,fy){const l=Math.hypot(x,y);return l<.001?{x:fx,y:fy}:{x:x/l,y:y/l}}
 function clearContainer(c){while(c.children.length){const child=c.removeChildAt(c.children.length-1);child.destroy({children:true});}}
