@@ -12,6 +12,7 @@ const PORT = process.env.PORT || 3000;
 // ARCHER_SKILLS_PATCH_V1
 // LOGIN_BOARD_PERSISTENCE_V1
 // BOSS_EVENT_V2
+// BOSS_EVENT_V3
 
 const BOARD = { map: 'village', x: 1300, y: 650, range: 165 };
 const DATABASE_URL = process.env.DATABASE_URL || '';
@@ -23,14 +24,14 @@ let nextMemoryPostId = 1;
 
 const MAPS = {
   forest: {
-    id: 'forest', name: '숲', width: 5200, height: 3400, safeAll: false,
-    safeZone: { x: 2600, y: 1700, radius: 470 },
-    portals: [{ id: 'forest-village', x: 2600, y: 1700, radius: 82, label: '마을 포탈', target: 'village', targetX: 1300, targetY: 1240 }]
+    id: 'forest', name: '숲', width: 4800, height: 3600, safeAll: false,
+    safeZone: { x: 2400, y: 1800, radius: 470 },
+    portals: [{ id: 'forest-village', x: 2400, y: 1800, radius: 82, label: '마을 포탈', target: 'village', targetX: 1300, targetY: 1240 }]
   },
   village: {
     id: 'village', name: '마을', width: 2600, height: 1900, safeAll: true, safeZone: null,
     portals: [
-      { id: 'village-forest', x: 1300, y: 950, radius: 82, label: '숲 포탈', target: 'forest', targetX: 2600, targetY: 1940 },
+      { id: 'village-forest', x: 1300, y: 950, radius: 82, label: '숲 포탈', target: 'forest', targetX: 2400, targetY: 2040 },
       { id: 'village-arena', x: 2050, y: 950, radius: 82, label: '결투장 포탈', target: 'arena', targetX: 1200, targetY: 1260 }
     ]
   },
@@ -179,23 +180,7 @@ function circleRectOverlap(x, y, radius, rect) {
   return dx * dx + dy * dy < radius * radius;
 }
 function forestBlocked(x, y, radius = 20) {
-  if (x < radius || y < radius || x > MAPS.forest.width - radius || y > MAPS.forest.height - radius) return true;
-  for (const water of FOREST_WATER_COLLIDERS) {
-    const dx = x - water.x, dy = y - water.y, rr = radius + water.r;
-    if (dx * dx + dy * dy < rr * rr) return true;
-  }
-  for (const cliff of FOREST_CLIFFS) if (circleRectOverlap(x, y, radius, cliff)) return true;
-  for (const tree of FOREST_TREES) {
-    const dx = x - tree.x, dy = y - tree.y, rr = radius + tree.trunk;
-    if (dx * dx + dy * dy < rr * rr) return true;
-  }
-  for (const rock of FOREST_ROCKS) {
-    const dx = x - rock.x, dy = y - rock.y, rr = radius + rock.r * 0.72;
-    if (dx * dx + dy * dy < rr * rr) return true;
-  }
-  const caveDist = Math.hypot(x - FOREST_CAVE.x, y - FOREST_CAVE.y);
-  if (caveDist < FOREST_CAVE.r + radius && y < FOREST_CAVE.y + 70) return true;
-  return false;
+  return x < radius || y < radius || x > MAPS.forest.width - radius || y > MAPS.forest.height - radius;
 }
 
 const MAX_PLAYERS = 20;
@@ -221,7 +206,8 @@ const SLIME_RESPAWN_MS = 5000;
 const BOSS_TARGET = 30;
 const HIDDEN_ELITE_TARGET = 20;
 const EVENT_WAVE_TARGET = 20;
-const EVENT_SAFE_GRACE_MS = 20000;
+const ZONE_DEFENSE_WINDOW_MS = 24000;
+const MAX_EVENT_DEATHS = 4;
 const MID_BOSS_HP = 520;
 const KING_HP = 2400;
 const QUEEN_HP = 3900;
@@ -413,7 +399,13 @@ let eliteProgress = 0;
 let bossId = null;
 let bossPhase = 'grind';
 let waveKills = 0;
-let safeZoneDropAt = 0;
+let safeZoneActive = true;
+let zoneAttackStartedAt = 0;
+let zoneDestroyAt = 0;
+let zoneDefended = false;
+let eventDamageBuff = 1;
+let eventAttackSpeedBuff = 1;
+let eventDeaths = 0;
 
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 function normalize(x, y, fx = 0, fy = 1) {
@@ -436,9 +428,8 @@ function isPointInForestSafeZone(x, y, extra = 0) {
   const dx = x - z.x, dy = y - z.y, r = z.radius + extra;
   return dx * dx + dy * dy <= r * r;
 }
-function forestSafeZoneActive(now = Date.now()) {
-  if (bossPhase === 'grind') return true;
-  return !(safeZoneDropAt && now >= safeZoneDropAt);
+function forestSafeZoneActive() {
+  return bossPhase === 'grind' ? true : safeZoneActive;
 }
 function isPlayerSafe(p) {
   if (!p || !p.alive) return true;
@@ -448,6 +439,16 @@ function isPlayerSafe(p) {
 }
 function canPvp(a, b) {
   return !!(a && b && a.id !== b.id && a.alive && b.alive && a.map === b.map && !isPlayerSafe(a) && !isPlayerSafe(b));
+}
+
+function finalBuffActive(p) {
+  return !!(p && p.map === 'forest' && (bossPhase === 'king' || bossPhase === 'queen'));
+}
+function playerDamageMultiplier(p) {
+  return finalBuffActive(p) ? eventDamageBuff : 1;
+}
+function playerCooldownFor(p, base) {
+  return Math.max(120, Math.round(base / (finalBuffActive(p) ? eventAttackSpeedBuff : 1)));
 }
 
 function gridKey(cx, cy) { return cx + ':' + cy; }
@@ -520,7 +521,7 @@ function makePlayer(id) {
     direction: 'front', moving: false, avatar: 'mage',
     hp: PLAYER_MAX_HP, maxHp: PLAYER_MAX_HP, alive: true, respawnAt: 0,
     lastSoulFireAt: 0, lastSlashAt: 0, lastChainAt: 0, lastTripleArrowAt: 0, lastArrowRainAt: 0, lastGhostShipAt: 0,
-    ghostShipUntil: 0, ghostDirX: 0, ghostDirY: 1, ghostHitKeys: new Set(), lastPortalAt: 0
+    ghostShipUntil: 0, ghostDirX: 0, ghostDirY: 1, ghostHitKeys: new Set(), lastPortalAt: 0, respawnToVillage: false
   };
 }
 
@@ -564,25 +565,66 @@ function clearMonstersForEvent() {
 }
 function startInvasionWave() {
   if (bossPhase !== 'grind') return;
-  clearMonstersForEvent(); bossPhase='wave'; waveKills=0; safeZoneDropAt=Date.now()+EVENT_SAFE_GRACE_MS;
+  clearMonstersForEvent();
+  bossPhase='wave'; waveKills=0; safeZoneActive=true; zoneAttackStartedAt=0; zoneDestroyAt=0; zoneDefended=false;
+  eventDamageBuff=1; eventAttackSpeedBuff=1; eventDeaths=0;
   const z=MAPS.forest.safeZone;
-  const anchors=[{x:z.x,y:360},{x:MAPS.forest.width-420,y:z.y},{x:z.x,y:MAPS.forest.height-360},{x:420,y:z.y}];
+  const anchors=[{x:z.x,y:260},{x:MAPS.forest.width-260,y:z.y},{x:z.x,y:MAPS.forest.height-260},{x:260,y:z.y}];
   for (const a of anchors) {
     const d=normalize(z.x-a.x,z.y-a.y,0,1), px=-d.y, py=d.x;
     createSlime(false,{x:a.x,y:a.y,midBoss:true,eventMob:true,marchToCenter:true});
     const offs=[-132,-54,54,132], elites=[false,true,true,false];
     for(let i=0;i<4;i++) createSlime(elites[i],{x:a.x+px*offs[i],y:a.y+py*offs[i],eventMob:true,marchToCenter:true});
   }
-  rebuildSlimeGrid(); emitMap('forest','bossWaveStarted',{target:EVENT_WAVE_TARGET,safeDropInMs:EVENT_SAFE_GRACE_MS});
+  rebuildSlimeGrid();
+  emitMap('forest','bossWaveStarted',{target:EVENT_WAVE_TARGET,maxDeaths:MAX_EVENT_DEATHS});
+}
+function beginSafeZoneAttack(now) {
+  if (bossPhase!=='wave' || !safeZoneActive || zoneAttackStartedAt) return;
+  zoneAttackStartedAt=now; zoneDestroyAt=now+ZONE_DEFENSE_WINDOW_MS;
+  emitMap('forest','safeZoneUnderAttack',{destroyAt:zoneDestroyAt,duration:ZONE_DEFENSE_WINDOW_MS});
+}
+function breakSafeZone(now) {
+  if (!safeZoneActive || bossPhase!=='wave') return;
+  safeZoneActive=false; zoneDefended=false; eventDamageBuff=1; eventAttackSpeedBuff=1;
+  emitMap('forest','safeZoneBroken',{at:now});
+}
+function awardDefenseBuff(now) {
+  if (!safeZoneActive) { eventDamageBuff=1; eventAttackSpeedBuff=1; return; }
+  zoneDefended=true;
+  let ratio=1;
+  if(zoneAttackStartedAt && zoneDestroyAt) ratio=Math.max(0,Math.min(1,(zoneDestroyAt-now)/ZONE_DEFENSE_WINDOW_MS));
+  eventDamageBuff=Number((1.12+0.28*ratio).toFixed(2));
+  eventAttackSpeedBuff=Number((1.08+0.27*ratio).toFixed(2));
+  emitMap('forest','bossBuffAwarded',{damage:eventDamageBuff,speed:eventAttackSpeedBuff,perfect:!zoneAttackStartedAt});
 }
 function startFinalBoss(type) {
-  clearMonstersForEvent(); bossPhase=type; if(!safeZoneDropAt) safeZoneDropAt=Date.now()+EVENT_SAFE_GRACE_MS;
-  const z=MAPS.forest.safeZone, slime=createSlime(false,{x:z.x,y:520,bossType:type,eventMob:true});
-  bossId=slime.id; rebuildSlimeGrid(); emitMap('forest','bossSpawned',{x:slime.x,y:slime.y,map:'forest',type});
+  if(type==='king') awardDefenseBuff(Date.now());
+  else { eventDamageBuff=1; eventAttackSpeedBuff=1; zoneDefended=false; eventDeaths=0; }
+  clearMonstersForEvent(); bossPhase=type; safeZoneActive=false; zoneDestroyAt=0;
+  const z=MAPS.forest.safeZone, spawnY=Math.max(280,z.y-1050), slime=createSlime(false,{x:z.x,y:spawnY,bossType:type,eventMob:true});
+  bossId=slime.id; rebuildSlimeGrid();
+  emitMap('forest','bossSpawned',{x:slime.x,y:slime.y,map:'forest',type,damageBuff:eventDamageBuff,speedBuff:eventAttackSpeedBuff});
+}
+function resetBossEvent() {
+  clearMonstersForEvent(); bossPhase='grind'; bossProgress=0; eliteProgress=0; waveKills=0;
+  safeZoneActive=true; zoneAttackStartedAt=0; zoneDestroyAt=0; zoneDefended=false;
+  eventDamageBuff=1; eventAttackSpeedBuff=1; eventDeaths=0; spawnBaselineSlimes();
 }
 function finishBossEvent(now,type) {
-  clearMonstersForEvent(); bossPhase='grind'; bossProgress=0; eliteProgress=0; waveKills=0; safeZoneDropAt=0;
-  spawnBaselineSlimes(); emitMap('forest','bossDefeated',{type});
+  resetBossEvent(); emitMap('forest','bossDefeated',{type});
+}
+function failBossEvent(now) {
+  if(bossPhase==='grind') return;
+  resetBossEvent();
+  for(const p of players.values()){
+    if(p.map!=='forest') continue;
+    p.respawnToVillage=false; p.hp=p.maxHp; p.alive=true; p.respawnAt=0;
+    changePlayerMap(p,'village',1300,1240);
+    const sock=socketForPlayer(p.id); if(sock) sock.emit('playerRespawned',{map:'village'});
+  }
+  emitMap('forest','bossEventFailed',{reason:'deaths',maxDeaths:MAX_EVENT_DEATHS});
+  io.to(roomFor('village')).emit('bossEventFailed',{reason:'deaths',maxDeaths:MAX_EVENT_DEATHS});
 }
 function respawnSlime(slime) {
   if (slime.boss || slime.eventMob || bossPhase!=='grind' || slime.suppressedByBoss) return;
@@ -616,18 +658,25 @@ function changePlayerMap(p, targetMap, x, y) {
   }
 }
 function respawnPlayer(p) {
-  const point = playerForestSafeSpawn();
-  changePlayerMap(p, 'forest', point.x, point.y);
-  p.hp = p.maxHp; p.alive = true; p.respawnAt = 0;
-  const socket = socketForPlayer(p.id);
-  if (socket) socket.emit('playerRespawned');
+  if(p.respawnToVillage){
+    p.respawnToVillage=false; changePlayerMap(p,'village',1300,1240);
+  }else{
+    const point=playerForestSafeSpawn(); changePlayerMap(p,'forest',point.x,point.y);
+  }
+  p.hp=p.maxHp; p.alive=true; p.respawnAt=0;
+  const socket=socketForPlayer(p.id); if(socket) socket.emit('playerRespawned',{map:p.map});
 }
 function defeatPlayer(p, now, source = 'monster') {
   if (!p.alive) return;
-  p.hp = 0; p.alive = false; p.respawnAt = now + PLAYER_RESPAWN_MS;
-  p.inputX = 0; p.inputY = 0; p.moving = false;
-  const socket = socketForPlayer(p.id);
-  if (socket) socket.emit('playerDefeated', { source });
+  const inEvent=p.map==='forest'&&bossPhase!=='grind';
+  p.hp=0; p.alive=false; p.respawnAt=now+PLAYER_RESPAWN_MS; p.inputX=0; p.inputY=0; p.moving=false;
+  if(inEvent) p.respawnToVillage=true;
+  const socket=socketForPlayer(p.id); if(socket) socket.emit('playerDefeated',{source});
+  if(inEvent && source==='monster'){
+    eventDeaths++;
+    emitMap('forest','bossDeathCount',{deaths:eventDeaths,maxDeaths:MAX_EVENT_DEATHS});
+    if(eventDeaths>=MAX_EVENT_DEATHS) failBossEvent(now);
+  }
 }
 function damagePlayer(p, damage, now, source = 'monster') {
   if (!p.alive || isPlayerSafe(p)) return false;
@@ -673,13 +722,14 @@ function resolveAim(p, aimData, autoAim, range) {
 function skillBlock(p, lastAt, cooldown) {
   if (!p.alive) return 'dead';
   if (isPlayerSafe(p)) return 'safe';
-  if (Date.now() - lastAt < cooldown) return 'cooldown';
+  if (Date.now() - lastAt < playerCooldownFor(p, cooldown)) return 'cooldown';
   return null;
 }
 function applyCombatDamage(t, amount, owner, now) {
   if (t.type === 'slime') {
     if (!t.ref.alive) return false;
-    t.ref.hp -= amount;
+    const finalAmount=Math.max(1,Math.round(amount*playerDamageMultiplier(owner)));
+    t.ref.hp -= finalAmount;
     if (t.ref.hp <= 0) killSlime(t.ref, now);
     return true;
   }
@@ -908,12 +958,27 @@ function runBossSpecial(s,now) {
   }
 }
 function updateMonsterAI(now) {
+  if(bossPhase==='wave'&&safeZoneActive&&zoneDestroyAt&&now>=zoneDestroyAt) breakSafeZone(now);
   for(const s of slimes.values()){
     if(!s.alive) continue;
     if(s.bossType) runBossSpecial(s,now);
     if(bossPhase==='wave'&&s.eventMob&&s.marchToCenter){
-      s.active=true;const z=MAPS.forest.safeZone,dx=z.x-s.x,dy=z.y-s.y,dist=Math.max(.001,Math.hypot(dx,dy));
-      if(dist>175||forestSafeZoneActive(now)){const stats=monsterStats(s);let ax=dx/dist,ay=dy/dist;if(now<s.detourUntil){const side=s.detourSign||1,tx=-ay*side,ty=ax*side,n=normalize(ax*.35+tx*.94,ay*.35+ty*.94,ax,ay);ax=n.x;ay=n.y;}s.vx=ax*stats.speed;s.vy=ay*stats.speed;s.targetId=null;s.changeAt=now+300;continue;}
+      s.active=true;
+      const stats=monsterStats(s), target=nearestForestPlayer(s,stats.aggro,true);
+      if(target){
+        s.targetId=target.id;
+        const dx=target.x-s.x,dy=target.y-s.y,dist=Math.max(.001,Math.hypot(dx,dy));
+        const attackRange=s.radius+PLAYER_RADIUS+(s.midBoss?22:s.elite?18:12);
+        if(dist<=attackRange){
+          s.vx=0;s.vy=0;
+          if(now-s.lastAttackAt>=stats.cooldown){s.lastAttackAt=now;if(damagePlayer(target,stats.damage,now,'monster'))emitMap('forest','combatEffect',{type:'monsterHit',id:nextEffectId++,x1:s.x,y1:s.y,x2:target.x,y2:target.y,life:.22});}
+        }else{const a=normalize(dx,dy);s.vx=a.x*stats.speed;s.vy=a.y*stats.speed;s.changeAt=now+300;}
+        continue;
+      }
+      const z=MAPS.forest.safeZone,dx=z.x-s.x,dy=z.y-s.y,dist=Math.max(.001,Math.hypot(dx,dy));
+      const stopDistance=z.radius+s.radius+10;
+      if(safeZoneActive&&dist<=stopDistance){s.vx=0;s.vy=0;s.targetId=null;beginSafeZoneAttack(now);continue;}
+      const a=normalize(dx,dy),speed=stats.speed*(safeZoneActive?1:1.12);s.vx=a.x*speed;s.vy=a.y*speed;s.targetId=null;s.changeAt=now+300;continue;
     }
     const awake=s.boss?nearestForestPlayer(s,99999,false):nearestForestPlayer(s,MONSTER_ACTIVE_RADIUS,false);
     if(!awake){s.active=false;s.targetId=null;s.vx=0;s.vy=0;continue;}
@@ -956,12 +1021,14 @@ function nearestPortal(p) {
 }
 function usePortal(p) {
   if (!p.alive) return;
-  const now = Date.now();
-  if (now - p.lastPortalAt < PORTAL_COOLDOWN) return;
-  const portal = nearestPortal(p);
-  if (!portal) return;
-  p.lastPortalAt = now;
-  changePlayerMap(p, portal.target, portal.targetX, portal.targetY);
+  const now=Date.now();
+  if(now-p.lastPortalAt<PORTAL_COOLDOWN) return;
+  const portal=nearestPortal(p); if(!portal) return;
+  if(p.map==='forest'&&bossPhase==='wave'){
+    const socket=socketForPlayer(p.id); if(socket) socket.emit('portalBlocked',{message:'중간보스 방어전 중에는 숲 귀환 포탈을 사용할 수 없습니다.'});
+    return;
+  }
+  p.lastPortalAt=now; changePlayerMap(p,portal.target,portal.targetX,portal.targetY);
 }
 
 function serializePlayer(p) {
@@ -1000,7 +1067,10 @@ function stateForPlayer(viewer) {
     safe: isPlayerSafe(viewer), portals: map.portals,
     players: playerState, slimes: slimeState, soulFires: fires,
     bossProgress, bossTarget:BOSS_TARGET, bossActive:bossPhase !== 'grind', bossPhase,
-    waveKills, waveTarget:EVENT_WAVE_TARGET, safeZoneActive:forestSafeZoneActive(), safeZoneDropAt,
+    waveKills, waveTarget:EVENT_WAVE_TARGET, safeZoneActive:forestSafeZoneActive(),
+    zoneAttackStartedAt, zoneDestroyAt, zoneUnderAttack:bossPhase==='wave'&&safeZoneActive&&!!zoneAttackStartedAt,
+    eventDeaths, maxEventDeaths:MAX_EVENT_DEATHS, damageBuff:eventDamageBuff, attackSpeedBuff:eventAttackSpeedBuff,
+    forestReturnLocked:bossPhase==='wave',
     profile: { nickname: viewer.nickname, loggedIn: !!viewer.userId, playSeconds: currentPlaySeconds(viewer) },
     board: viewer.map === BOARD.map ? { x: BOARD.x, y: BOARD.y, hasNew: latestBoardPostId > Number(viewer.boardSeenId || 0) } : null
   };
@@ -1097,29 +1167,29 @@ io.on('connection', socket => {
 
   socket.on('castSoulFire', data => {
     const r = castSoulFire(p, data && data.aim, !!(data && data.autoAim));
-    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'soulFire', cooldown: SOUL_FIRE_COOLDOWN });
+    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'soulFire', cooldown: playerCooldownFor(p, SOUL_FIRE_COOLDOWN) });
   });
 
   socket.on('castSlash', data => {
     const r = castSlash(p, data && data.aim, !!(data && data.autoAim));
-    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'slash', cooldown: SLASH_COOLDOWN });
+    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'slash', cooldown: playerCooldownFor(p, SLASH_COOLDOWN) });
   });
 
   socket.on('castChain', data => {
     const r = castChainLightning(p, data && data.aim, !!(data && data.autoAim));
-    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'chain', cooldown: CHAIN_COOLDOWN });
+    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'chain', cooldown: playerCooldownFor(p, CHAIN_COOLDOWN) });
   });
   socket.on('castTripleArrow', data => {
     const r = castTripleArrow(p, data && data.aim, !!(data && data.autoAim));
-    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'tripleArrow', cooldown: TRIPLE_ARROW_COOLDOWN });
+    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'tripleArrow', cooldown: playerCooldownFor(p, TRIPLE_ARROW_COOLDOWN) });
   });
   socket.on('castArrowRain', data => {
     const r = castArrowRain(p, data && data.target);
-    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'arrowRain', cooldown: ARROW_RAIN_COOLDOWN });
+    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'arrowRain', cooldown: playerCooldownFor(p, ARROW_RAIN_COOLDOWN) });
   });
   socket.on('castGhostShip', data => {
     const r = castGhostShip(p, data && data.aim, !!(data && data.autoAim));
-    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'ghostShip', cooldown: GHOST_SHIP_COOLDOWN });
+    socket.emit('skillCastResult', { success: r.success, reason: r.reason || null, skill: 'ghostShip', cooldown: playerCooldownFor(p, GHOST_SHIP_COOLDOWN) });
   });
 
   socket.on('disconnect', () => {
@@ -1217,7 +1287,7 @@ setInterval(() => {
       if (fire.pierce && fire.hitKeys) fire.hitKeys.add(hit.key);
       else soulFires.delete(fire.id);
       if (hit.type === 'slime') {
-        hit.ref.hp -= SOUL_FIRE_DAMAGE;
+        hit.ref.hp -= Math.max(1,Math.round(SOUL_FIRE_DAMAGE*playerDamageMultiplier(owner)));
         if (hit.ref.hp <= 0) killSlime(hit.ref, now);
       } else if (owner) damagePlayer(hit.ref, SOUL_FIRE_DAMAGE, now, 'pvp');
     }
@@ -1234,6 +1304,7 @@ setInterval(() => {
 app.get('/mage.png', (_req, res) => res.sendFile(path.join(__dirname, 'mage.png')));
 app.get('/pirate.png', (_req, res) => res.sendFile(path.join(__dirname, 'pirate.png')));
 app.get('/archer.png', (_req, res) => res.sendFile(path.join(__dirname, 'archer.png')));
+app.get('/forest-map.svg', (_req, res) => res.sendFile(path.join(__dirname, 'forest-map.svg')));
 
 app.get('/', (_req, res) => {
   res.type('html').send(`<!doctype html>
@@ -1296,16 +1367,17 @@ const app=new PIXI.Application({resizeTo:window,backgroundColor:0x182716,antiali
 host.appendChild(app.view);PIXI.settings.ROUND_PIXELS=true;
 const worldRoot=new PIXI.Container(),staticLayer=new PIXI.Container(),portalLayer=new PIXI.Container(),slimeLayer=new PIXI.Container(),playerLayer=new PIXI.Container(),projectileLayer=new PIXI.Container(),effectLayer=new PIXI.Container(),previewLayer=new PIXI.Container();
 worldRoot.addChild(staticLayer,portalLayer,slimeLayer,playerLayer,projectileLayer,effectLayer,previewLayer);app.stage.addChild(worldRoot);
-let myId=null,currentMap='forest',currentMapName='숲',world={width:5200,height:3400},currentPortals=[],forestSafeZone={x:2600,y:1700,radius:470},currentSafe=true;
-let players=[],slimes=[],soulFires=[],serverFull=false,selectedAvatar='mage',keys=new Set(),cameraX=0,cameraY=0,mouseX=innerWidth/2,mouseY=innerHeight/2,mouseAimActive=false,forestSafeActive=true;
+let myId=null,currentMap='forest',currentMapName='숲',world={width:4800,height:3600},currentPortals=[],forestSafeZone={x:2400,y:1800,radius:470},currentSafe=true;
+let players=[],slimes=[],soulFires=[],serverFull=false,selectedAvatar='mage',keys=new Set(),cameraX=0,cameraY=0,mouseX=innerWidth/2,mouseY=innerHeight/2,mouseAimActive=false,forestSafeActive=true,bossPhaseClient='grind',forestReturnLocked=false,zoneUnderAttack=false,zoneDestroyAtClient=0,eventDeathsClient=0,maxEventDeathsClient=4,damageBuffClient=1,speedBuffClient=1;
 let movePointerId=null,attackPointerId=null,moveX=0,moveY=0,attackX=0,attackY=1,attackDragAmount=0,attackDragging=false,lastMobileAim={x:0,y:1},lastInputX=999,lastInputY=999,lastAimX=999,lastAimY=999;
 let soulFireCooldown=900,slashCooldown=1000,chainCooldown=4500,tripleArrowCooldown=850,arrowRainCooldown=4800,ghostShipCooldown=6500,slashRange=145,slashHalfAngle=Math.PI/3,cooldownUntil={mage:0,pirate:0,chain:0,archer:0,archerQ:0,pirateQ:0},clearTimer=null,deathTimer=null;
 const playerNodes=new Map(),slimeNodes=new Map(),projectileNodes=new Map(),effectNodes=new Map(),playerTargets=new Map(),slimeTargets=new Map();
 const MAGE_FRAMES=[[{x:104,y:75,w:236,h:308},{x:376,y:74,w:237,h:308},{x:680,y:74,w:236,h:308}],[{x:98,y:417,w:234,h:287},{x:375,y:418,w:230,h:286},{x:679,y:417,w:229,h:287}],[{x:116,y:744,w:222,h:285},{x:387,y:745,w:221,h:284},{x:691,y:744,w:224,h:285}],[{x:152,y:1071,w:212,h:279},{x:419,y:1069,w:214,h:282},{x:722,y:1070,w:217,h:279}]];
 const PIRATE_FRAMES=[[{x:74,y:29,w:249,h:319,anchorX:107},{x:422,y:30,w:229,h:311,anchorX:121},{x:761,y:30,w:230,h:318,anchorX:144}],[{x:91,y:384,w:245,h:326,anchorX:90},{x:431,y:384,w:225,h:318,anchorX:112},{x:772,y:384,w:235,h:326,anchorX:133}],[{x:45,y:738,w:293,h:312,anchorX:136},{x:418,y:738,w:236,h:316,anchorX:125},{x:755,y:738,w:273,h:312,anchorX:150}],[{x:67,y:1092,w:270,h:312,anchorX:114},{x:427,y:1092,w:227,h:317,anchorX:116},{x:751,y:1092,w:266,h:313,anchorX:154}]];
 let ARCHER_FRAMES=null;
-let mageTextures=null,pirateTextures=null,archerTextures=null;
+let mageTextures=null,pirateTextures=null,archerTextures=null,forestMapTexture=null;
 try{const mageBase=await PIXI.Assets.load('/mage.png?v=121');const pirateBase=await PIXI.Assets.load('/pirate.png?v=121');const archerBase=await PIXI.Assets.load('/archer.png?v=121');const archerCellW=archerBase.width/3,archerCellH=archerBase.height/4;ARCHER_FRAMES=Array.from({length:4},(_,row)=>Array.from({length:3},(_,col)=>({x:col*archerCellW,y:row*archerCellH,w:archerCellW,h:archerCellH})));mageTextures=MAGE_FRAMES.map(row=>row.map(f=>new PIXI.Texture(mageBase.baseTexture,new PIXI.Rectangle(f.x,f.y,f.w,f.h))));pirateTextures=PIRATE_FRAMES.map(row=>row.map(f=>new PIXI.Texture(pirateBase.baseTexture,new PIXI.Rectangle(f.x,f.y,f.w,f.h))));archerTextures=ARCHER_FRAMES.map(row=>row.map(f=>new PIXI.Texture(archerBase.baseTexture,new PIXI.Rectangle(f.x,f.y,f.w,f.h))));}catch(err){statusEl.textContent='캐릭터 이미지 로드 실패';}
+try{forestMapTexture=await PIXI.Assets.load('/forest-map.svg?v=3');}catch(err){console.warn('forest map artwork load failed');}
 const socket=io({transports:['websocket','polling']});
 function directionRow(d){return d==='back'?1:d==='left'?2:d==='right'?3:0}function walkFrame(p){return p.moving?Math.floor(performance.now()/145)%3:1}function clampClient(v,a,b){return Math.max(a,Math.min(b,v))}function norm(x,y,fx,fy){const l=Math.hypot(x,y);return l<.001?{x:fx,y:fy}:{x:x/l,y:y/l}}
 function clearContainer(c){while(c.children.length){const child=c.removeChildAt(c.children.length-1);child.destroy({children:true});}}
@@ -1313,18 +1385,8 @@ function drawPolyline(g,points,width,color,alpha){if(!points.length)return;g.lin
 function buildMap(){
   clearContainer(staticLayer);clearContainer(portalLayer);const g=new PIXI.Graphics();
   if(currentMap==='forest'){
-    g.beginFill(0x35682f).drawRect(0,0,world.width,world.height).endFill();
-    for(let i=0;i<70;i++){const x=(i*811)%world.width,y=(i*1297)%world.height,r=90+(i%6)*32;g.beginFill(i%2?0x3d7436:0x2f6030,0.16).drawCircle(x,y,r).endFill();}
-    for(const river of FOREST_LAYOUT.rivers){drawPolyline(g,river.points,river.width+30,0x294a55,0.95);drawPolyline(g,river.points,river.width,0x267ca0,1);drawPolyline(g,river.points,Math.max(10,river.width*.08),0x70cbe5,0.38);}
-    const c=FOREST_LAYOUT.clearing;g.beginFill(0x75aa45,1).drawEllipse(c.x,c.y,c.rx,c.ry).endFill();g.lineStyle(7,0x9bcf61,0.55).drawEllipse(c.x,c.y,c.rx-20,c.ry-20);
-    for(const pathPoints of FOREST_LAYOUT.paths){drawPolyline(g,pathPoints,128,0x8f7447,0.45);drawPolyline(g,pathPoints,105,0xc8a96b,1);drawPolyline(g,pathPoints,48,0xd7bc7f,0.38);}
-    for(const cliff of FOREST_LAYOUT.cliffs){const left=cliff.x-cliff.w/2,top=cliff.y-cliff.h/2;g.beginFill(0x38432d).drawRoundedRect(left,top,cliff.w,cliff.h,36).endFill();g.beginFill(0x6b7454).drawRoundedRect(left+14,top+10,cliff.w-28,cliff.h*.58,28).endFill();for(let k=0;k<Math.max(4,Math.floor(cliff.w/110));k++){const bx=left+45+k*95,by=top+cliff.h*.58+(k%2)*22;g.beginFill(k%2?0x59624a:0x747c61).drawCircle(bx,by,35+(k%3)*7).endFill();}}
-    const cave=FOREST_LAYOUT.cave;g.beginFill(0x45483c).drawCircle(cave.x,cave.y,cave.r+55).endFill();g.beginFill(0x68705a).drawCircle(cave.x,cave.y,cave.r+22).endFill();g.beginFill(0x171a17).drawEllipse(cave.x,cave.y+38,cave.r*.72,cave.r*.7).endFill();g.beginFill(0x282c27).drawEllipse(cave.x,cave.y+68,cave.r*.48,cave.r*.42).endFill();
-    for(const rock of FOREST_LAYOUT.rocks){g.beginFill(0x4e5846,0.45).drawEllipse(rock.x+5,rock.y+9,rock.r*.9,rock.r*.45).endFill();g.beginFill(0x737b68).drawCircle(rock.x,rock.y,rock.r).endFill();g.beginFill(0x939987,0.55).drawCircle(rock.x-rock.r*.25,rock.y-rock.r*.3,rock.r*.32).endFill();}
-    for(const tree of FOREST_LAYOUT.trees){const x=tree.x,y=tree.y,r=tree.r;g.beginFill(0x172e1c,0.35).drawEllipse(x+7,y+r*.72,r*.9,r*.34).endFill();g.beginFill(0x5f4025).drawRect(x-tree.trunk*.38,y-2,tree.trunk*.76,r*.92).endFill();g.beginFill(0x1f6539).drawCircle(x-r*.43,y-r*.08,r*.68).drawCircle(x+r*.43,y-r*.08,r*.68).drawCircle(x,y-r*.42,r*.82).endFill();g.beginFill(0x3f9450,0.75).drawCircle(x-r*.18,y-r*.62,r*.32).endFill();}
-    for(const bridge of FOREST_LAYOUT.bridges){const left=bridge.x-bridge.w/2,top=bridge.y-bridge.h/2;g.beginFill(0x553b25).drawRoundedRect(left-12,top+18,bridge.w+24,bridge.h-36,12).endFill();for(let plank=0;plank<11;plank++){const px=left+plank*(bridge.w/10);g.beginFill(plank%2?0x9b6a3b:0xad7846).drawRect(px-9,top+26,18,bridge.h-52).endFill();}g.lineStyle(7,0x402d1e).moveTo(left,top+22).lineTo(left+bridge.w,top+22).moveTo(left,top+bridge.h-22).lineTo(left+bridge.w,top+bridge.h-22);}
-    g.beginFill(0x93c75f,0.16).lineStyle(5,0xc9ffb8,0.55).drawCircle(forestSafeZone.x,forestSafeZone.y,forestSafeZone.radius).endFill();
-    if(!lowPower){for(let i=0;i<150;i++){const x=(i*977+333)%world.width,y=(i*557+911)%world.height;if(Math.hypot(x-c.x,y-c.y)>Math.max(c.rx,c.ry)*1.02)continue;g.beginFill([0xffe082,0xff9e9e,0xc9a3ff,0x9ee7ff][i%4],0.9).drawCircle(x,y,2+(i%2)).endFill();}}
+    if(forestMapTexture){const bg=new PIXI.Sprite(forestMapTexture);bg.width=world.width;bg.height=world.height;staticLayer.addChild(bg);}else{g.beginFill(0x72b34c).drawRect(0,0,world.width,world.height).endFill();}
+    g.beginFill(0xa9df79,0.10).lineStyle(6,0xd9ffbd,0.48).drawCircle(forestSafeZone.x,forestSafeZone.y,forestSafeZone.radius).endFill();
   }else if(currentMap==='village'){
     g.beginFill(0xc9b98b).drawRect(0,0,world.width,world.height).endFill();g.beginFill(0xb9ad88).drawCircle(1300,950,330).endFill();const houses=[[520,430,250,170,0x994c45],[1000,340,260,180,0x7d5144],[1590,350,250,170,0x995d3f],[2100,470,270,185,0x81505d],[470,1320,260,180,0x84543e],[1030,1460,250,170,0x9a5548],[1620,1470,260,180,0x7d5144],[2140,1310,250,170,0x995d3f]];for(const h of houses){const x=h[0],y=h[1],w=h[2],hh=h[3],roof=h[4];g.beginFill(0xead6aa).drawRect(x-w/2,y-hh/2,w,hh).endFill();g.beginFill(roof).moveTo(x-w/2-14,y-hh/2+5).lineTo(x,y-hh/2-52).lineTo(x+w/2+14,y-hh/2+5).closePath().endFill();g.beginFill(0x7b4f2b).drawRect(x-16,y+hh/2-48,32,48).endFill();}g.beginFill(0x5a3b24).drawRect(BOARD_CLIENT.x-58,BOARD_CLIENT.y-42,116,84).endFill();g.beginFill(0x8a6036).drawRect(BOARD_CLIENT.x-50,BOARD_CLIENT.y-35,100,63).endFill();g.beginFill(0x4b321f).drawRect(BOARD_CLIENT.x-42,BOARD_CLIENT.y+28,12,55).drawRect(BOARD_CLIENT.x+30,BOARD_CLIENT.y+28,12,55).endFill();
   }else{
@@ -1333,7 +1395,6 @@ function buildMap(){
   staticLayer.addChild(g);
   boardNoticeText=null;
   if(currentMap==='village'){const bt=new PIXI.Text('게시판',{fontFamily:'system-ui',fontSize:15,fontWeight:'900',fill:0xffffff,stroke:0x2a1a10,strokeThickness:4});bt.anchor.set(.5,1);bt.position.set(BOARD_CLIENT.x,BOARD_CLIENT.y-48);staticLayer.addChild(bt);boardNoticeText=new PIXI.Text('!',{fontFamily:'system-ui',fontSize:42,fontWeight:'1000',fill:0xffe14f,stroke:0x5b1e10,strokeThickness:6});boardNoticeText.anchor.set(.5,1);boardNoticeText.position.set(BOARD_CLIENT.x,BOARD_CLIENT.y-78);boardNoticeText.visible=!!(currentBoard&&currentBoard.hasNew);staticLayer.addChild(boardNoticeText);}
-  if(currentMap==='forest'){const label=new PIXI.Text('중앙 광장 · 안전지대',{fontFamily:'system-ui',fontSize:24,fontWeight:'900',fill:0xe9ffd5,stroke:0x27421f,strokeThickness:5});label.anchor.set(.5);label.position.set(FOREST_LAYOUT.clearing.x,FOREST_LAYOUT.clearing.y-510);staticLayer.addChild(label);}
   for(const p of currentPortals){const node=new PIXI.Container();node.position.set(p.x,p.y);node.portal=p;const ring=new PIXI.Graphics().lineStyle(7,0x9b82ff,0.9).drawCircle(0,0,42).beginFill(0x8264ff,0.25).drawCircle(0,0,25).endFill();const label=new PIXI.Text(p.label||'포탈',{fontFamily:'system-ui',fontSize:13,fontWeight:'900',fill:0xffffff,stroke:0x27183e,strokeThickness:4});label.anchor.set(.5,1);label.position.set(0,-52);node.addChild(ring,label);node.ring=ring;portalLayer.addChild(node);}
 }
 function createHpBar(width){const c=new PIXI.Container(),bg=new PIXI.Graphics().beginFill(0x151515,0.85).drawRoundedRect(-width/2,0,width,7,3).endFill(),bar=new PIXI.Graphics();c.addChild(bg,bar);c.bar=bar;c.widthValue=width;return c;}
@@ -1382,7 +1443,12 @@ function spawnEffect(e){
 }
 const preview=new PIXI.Graphics();previewLayer.addChild(preview);
 function getMe(){return players.find(p=>p.id===myId)||null}function getBoss(){return currentMap==='forest'?(slimes.find(s=>s.boss&&s.alive)||null):null}
-function updateZoneStatus(){if(currentMap==='forest'&&!forestSafeActive){zoneStatusEl.classList.add('danger');zoneStatusEl.innerHTML='⚠️ 안전지대 붕괴<small>중앙도 몬스터 공격 가능</small>';}else if(currentSafe){zoneStatusEl.classList.remove('danger');zoneStatusEl.innerHTML='🛡️ 안전 지대<small>PVP / 몬스터 공격 불가 · HP 회복</small>';}else{zoneStatusEl.classList.add('danger');zoneStatusEl.innerHTML=currentMap==='arena'?'⚔️ 결투장<small>PVP 전용 · 안전지대 없음</small>':'⚔️ 전투 지역<small>PVP 허용 · 몬스터 공격 가능</small>';}}
+function updateZoneStatus(){
+  if(currentMap==='forest'&&bossPhaseClient==='wave'&&zoneUnderAttack&&forestSafeActive){const sec=Math.max(0,Math.ceil((zoneDestroyAtClient-Date.now())/1000));zoneStatusEl.classList.add('danger');zoneStatusEl.innerHTML='⚠️ 안전지대 방어 '+sec+'초<small>붙은 몬스터를 빠르게 처치할수록 최종전 버프 증가</small>';}
+  else if(currentMap==='forest'&&!forestSafeActive){zoneStatusEl.classList.add('danger');const buff=(bossPhaseClient==='king'&&damageBuffClient>1)?'<small>공격력 +'+Math.round((damageBuffClient-1)*100)+'% · 공격속도 +'+Math.round((speedBuffClient-1)*100)+'%</small>':'<small>중앙도 몬스터 공격 가능</small>';zoneStatusEl.innerHTML='⚠️ 안전지대 제거'+buff;}
+  else if(currentSafe){zoneStatusEl.classList.remove('danger');zoneStatusEl.innerHTML='🛡️ 안전 지대<small>PVP / 몬스터 공격 불가 · HP 회복</small>';}
+  else{zoneStatusEl.classList.add('danger');zoneStatusEl.innerHTML=currentMap==='arena'?'⚔️ 결투장<small>PVP 전용 · 안전지대 없음</small>':'⚔️ 전투 지역<small>PVP 허용 · 몬스터 공격 가능</small>';}
+}
 function setAvatar(a){
   selectedAvatar=a;socket.emit('setAvatar',{avatar:a});avatarButtons.forEach(b=>b.classList.toggle('selected',b.dataset.avatar===a));chainBtn.classList.remove('hidden');
   if(a==='mage'){currentAvatarNameEl.textContent='마법사';skillNameEl.textContent='영혼불';chainStateEl.textContent='체인 라이트닝';attackLabel.textContent='영혼불';chainBtn.innerHTML='⚡<br>체인';}
@@ -1398,12 +1464,20 @@ socket.on('connect',()=>{if(!serverFull)statusEl.textContent='서버 접속됨';
 socket.on('welcome',d=>{myId=d.id;nicknameText.textContent=d.nickname||'Guest';profileLoggedIn=!!d.loggedIn;currentMap=d.map;currentMapName=d.mapName;world=d.world;currentPortals=d.portals||[];forestSafeZone=d.safeZone;soulFireCooldown=d.soulFireCooldown;slashCooldown=d.slashCooldown;chainCooldown=d.chainCooldown;tripleArrowCooldown=d.tripleArrowCooldown;arrowRainCooldown=d.arrowRainCooldown;ghostShipCooldown=d.ghostShipCooldown;slashRange=d.slashRange;slashHalfAngle=d.slashHalfAngle;maxCountEl.textContent=d.maxPlayers;mapNameEl.textContent=currentMapName;buildMap();setAvatar('mage');});
 socket.on('mapChanged',d=>{boardPanel.style.display='none';currentBoard=null;currentMap=d.map;currentMapName=d.mapName;world=d.world;currentPortals=d.portals||[];players=[];slimes=[];soulFires=[];for(const c of playerNodes.values())c.destroy({children:true});playerNodes.clear();playerTargets.clear();for(const c of slimeNodes.values())c.destroy({children:true});slimeNodes.clear();slimeTargets.clear();for(const c of projectileNodes.values())c.destroy();projectileNodes.clear();buildMap();mapNameEl.textContent=currentMapName;skillStateEl.textContent=currentMap==='arena'?'⚔️ 결투장 입장':currentMap==='village'?'마을 도착':'숲 도착';});
 socket.on('count',d=>{countEl.textContent=d.current;maxCountEl.textContent=d.max;});
-socket.on('state',d=>{currentMap=d.map||currentMap;currentMapName=d.mapName||currentMapName;world=d.world||world;currentPortals=d.portals||currentPortals;currentSafe=!!d.safe;forestSafeActive=d.safeZoneActive!==false;players=d.players||[];slimes=d.slimes||[];soulFires=d.soulFires||[];currentBoard=d.board||null;if(d.profile){nicknameText.textContent=d.profile.nickname||'Guest';profileLoggedIn=!!d.profile.loggedIn;playtimeText.textContent=formatPlaytime(d.profile.playSeconds||0);accountBtn.textContent=profileLoggedIn?'계정':'로그인';logoutBtn.style.display=profileLoggedIn?'inline-block':'none';}if(boardNoticeText)boardNoticeText.visible=!!(currentBoard&&currentBoard.hasNew);syncProjectiles();mapNameEl.textContent=currentMapName;const me=getMe();if(me)hpTextEl.textContent=Math.ceil(me.hp)+' / '+me.maxHp;if(currentMap==='forest'){if(d.bossPhase==='wave')bossProgressEl.textContent='⚠️ 침공 '+d.waveKills+' / '+d.waveTarget;else if(d.bossPhase==='king')bossProgressEl.textContent='👑 킹 슬라임';else if(d.bossPhase==='queen')bossProgressEl.textContent='♛ 슬라임 퀸';else bossProgressEl.textContent=d.bossProgress+' / '+d.bossTarget;}else bossProgressEl.textContent='-';updateZoneStatus();});
+socket.on('state',d=>{currentMap=d.map||currentMap;currentMapName=d.mapName||currentMapName;world=d.world||world;currentPortals=d.portals||currentPortals;currentSafe=!!d.safe;forestSafeActive=d.safeZoneActive!==false;bossPhaseClient=d.bossPhase||'grind';forestReturnLocked=!!d.forestReturnLocked;zoneUnderAttack=!!d.zoneUnderAttack;zoneDestroyAtClient=d.zoneDestroyAt||0;eventDeathsClient=d.eventDeaths||0;maxEventDeathsClient=d.maxEventDeaths||4;damageBuffClient=d.damageBuff||1;speedBuffClient=d.attackSpeedBuff||1;players=d.players||[];slimes=d.slimes||[];soulFires=d.soulFires||[];currentBoard=d.board||null;if(d.profile){nicknameText.textContent=d.profile.nickname||'Guest';profileLoggedIn=!!d.profile.loggedIn;playtimeText.textContent=formatPlaytime(d.profile.playSeconds||0);accountBtn.textContent=profileLoggedIn?'계정':'로그인';logoutBtn.style.display=profileLoggedIn?'inline-block':'none';}if(boardNoticeText)boardNoticeText.visible=!!(currentBoard&&currentBoard.hasNew);syncProjectiles();mapNameEl.textContent=currentMapName;const me=getMe();if(me)hpTextEl.textContent=Math.ceil(me.hp)+' / '+me.maxHp;if(currentMap==='forest'){const deaths=' · 사망 '+eventDeathsClient+'/'+maxEventDeathsClient;if(d.bossPhase==='wave')bossProgressEl.textContent='⚠️ 침공 '+d.waveKills+' / '+d.waveTarget+deaths;else if(d.bossPhase==='king')bossProgressEl.textContent='👑 킹 슬라임'+deaths;else if(d.bossPhase==='queen')bossProgressEl.textContent='♛ 슬라임 퀸'+deaths;else bossProgressEl.textContent=d.bossProgress+' / '+d.bossTarget;}else bossProgressEl.textContent='-';updateZoneStatus();});
 socket.on('combatEffect',e=>spawnEffect(e));
-socket.on('bossWaveStarted',()=>{if(currentMap!=='forest')return;skillStateEl.textContent='⚠️ 4방향 중간보스 침공! 중앙 안전지대가 곧 사라집니다';});socket.on('waveProgress',d=>{if(currentMap==='forest')skillStateEl.textContent='침공 몬스터 '+d.kills+' / '+d.target;});socket.on('bossSpawned',d=>{if(currentMap!=='forest')return;const queen=d.type==='queen';skillStateEl.textContent=queen?'♛ 히든 보스 슬라임 퀸 출현!':'👑 킹 슬라임 출현!';bossLocatorEl.style.display='block';bossLocatorEl.textContent=(queen?'♛ QUEEN':'👑 KING')+' · X '+Math.round(d.x)+' · Y '+Math.round(d.y);});
-socket.on('bossDefeated',d=>{if(currentMap!=='forest')return;skillStateEl.textContent='🏆 보스 처치! 스택 초기화';bossLocatorEl.style.display='none';E('clearSub').textContent=d&&d.type==='queen'?'♛ 슬라임 퀸 처치 완료':'👑 킹 슬라임 처치 완료';clearMessageEl.style.display='flex';clearTimeout(clearTimer);clearTimer=setTimeout(()=>{clearMessageEl.style.display='none';skillStateEl.textContent='대기';},3000);});
+socket.on('bossWaveStarted',()=>{if(currentMap!=='forest')return;skillStateEl.textContent='⚠️ 동·서·남·북 중간보스 침공! 귀환 포탈 봉인';});
+socket.on('waveProgress',d=>{if(currentMap==='forest')skillStateEl.textContent='침공 몬스터 '+d.kills+' / '+d.target;});
+socket.on('safeZoneUnderAttack',d=>{zoneUnderAttack=true;zoneDestroyAtClient=d.destroyAt||0;if(currentMap==='forest')skillStateEl.textContent='🚨 몬스터가 안전지대를 공격하기 시작했습니다!';});
+socket.on('safeZoneBroken',()=>{forestSafeActive=false;zoneUnderAttack=false;if(currentMap==='forest')skillStateEl.textContent='💥 안전지대가 파괴되었습니다!';});
+socket.on('bossBuffAwarded',d=>{damageBuffClient=d.damage||1;speedBuffClient=d.speed||1;if(currentMap==='forest')skillStateEl.textContent='🛡️ 방어 성공! 최종전 공격력/공격속도 버프 획득';});
+socket.on('bossDeathCount',d=>{eventDeathsClient=d.deaths||0;maxEventDeathsClient=d.maxDeaths||4;});
+socket.on('bossSpawned',d=>{if(currentMap!=='forest')return;const queen=d.type==='queen';skillStateEl.textContent=queen?'♛ 히든 보스 슬라임 퀸 출현!':'👑 킹 슬라임 출현!';bossLocatorEl.style.display='block';bossLocatorEl.textContent=(queen?'♛ QUEEN':'👑 KING')+' · X '+Math.round(d.x)+' · Y '+Math.round(d.y);});
+socket.on('bossDefeated',d=>{if(currentMap!=='forest')return;skillStateEl.textContent='🏆 보스 처치! 스택 초기화';bossLocatorEl.style.display='none';E('clearTitle').textContent='CLEAR!';E('clearSub').textContent=d&&d.type==='queen'?'♛ 슬라임 퀸 처치 완료':'👑 킹 슬라임 처치 완료';clearMessageEl.style.display='flex';clearTimeout(clearTimer);clearTimer=setTimeout(()=>{clearMessageEl.style.display='none';skillStateEl.textContent='대기';},3000);});
+socket.on('bossEventFailed',()=>{bossLocatorEl.style.display='none';E('clearTitle').textContent='FAILED';E('clearSub').textContent='사망 4회 · 보스전 리셋';clearMessageEl.style.display='flex';clearTimeout(clearTimer);clearTimer=setTimeout(()=>{clearMessageEl.style.display='none';E('clearTitle').textContent='CLEAR!';skillStateEl.textContent='대기';},2600);});
 socket.on('playerDefeated',d=>{deathMessageEl.textContent=d.source==='pvp'?'플레이어에게 쓰러졌습니다':'슬라임에게 쓰러졌습니다';deathMessageEl.classList.add('active');clearTimeout(deathTimer);deathTimer=setTimeout(()=>deathMessageEl.classList.remove('active'),1300);});
-socket.on('playerRespawned',()=>{deathMessageEl.classList.remove('active');skillStateEl.textContent='안전지대에서 부활';});
+socket.on('playerRespawned',d=>{deathMessageEl.classList.remove('active');skillStateEl.textContent=d&&d.map==='village'?'마을에서 부활':'안전지대에서 부활';});
+socket.on('portalBlocked',d=>{skillStateEl.textContent=d.message||'포탈을 사용할 수 없습니다.';});
 socket.on('serverFull',d=>{serverFull=true;statusEl.textContent='서버가 가득 찼습니다';countEl.textContent=d.maxPlayers;maxCountEl.textContent=d.maxPlayers;socket.io.opts.reconnection=false;});
 socket.on('disconnect',()=>{if(!serverFull)statusEl.textContent='재접속 중...';});
 socket.on('skillCastResult',d=>{
@@ -1436,7 +1510,7 @@ setInterval(()=>{
   if(r>0){chainBtn.classList.add('cooling');chainBtn.innerHTML=(r/1000).toFixed(1);chainStateEl.textContent=(r/1000).toFixed(1)+'초';}
   else{chainBtn.classList.remove('cooling');chainBtn.innerHTML=label;chainStateEl.textContent=selectedAvatar==='mage'?'체인 라이트닝':selectedAvatar==='pirate'?'유령해적선':'화살비';}
 },120);
-function updatePortalUi(){const me=getMe();if(!me||!me.alive){portalPrompt.style.display='none';portalBtn.style.display='none';return;}const boardNear=nearBoard();let best=null,d0=Infinity;for(const p of currentPortals){const d=Math.hypot(me.x-p.x,me.y-p.y);if(d<=145&&d<d0){d0=d;best=p;}}const active=boardNear||!!best;portalPrompt.style.display=active?'block':'none';portalPrompt.textContent=boardNear?'F · 게시판 열기':best?'F · '+(best.label||'포탈')+' 사용':'';if(coarse){portalBtn.style.display=active?'block':'none';portalBtn.textContent=boardNear?'게시판 열기':best?(best.label||'포탈')+' 이동':'포탈 이동';}}
+function updatePortalUi(){const me=getMe();if(!me||!me.alive){portalPrompt.style.display='none';portalBtn.style.display='none';return;}const boardNear=nearBoard();let best=null,d0=Infinity;for(const p of currentPortals){const d=Math.hypot(me.x-p.x,me.y-p.y);if(d<=145&&d<d0){d0=d;best=p;}}if(currentMap==='forest'&&forestReturnLocked){portalPrompt.style.display='none';portalBtn.style.display='none';return;}const active=boardNear||!!best;portalPrompt.style.display=active?'block':'none';portalPrompt.textContent=boardNear?'F · 게시판 열기':best?'F · '+(best.label||'포탈')+' 사용':'';if(coarse){portalBtn.style.display=active?'block':'none';portalBtn.textContent=boardNear?'게시판 열기':best?(best.label||'포탈')+' 이동':'포탈 이동';}}
 function updateBossLocator(){if(currentMap!=='forest'){bossLocatorEl.style.display='none';return;}const b=getBoss(),me=getMe();if(!b){bossLocatorEl.style.display='none';return;}bossLocatorEl.style.display='block';if(!me){bossLocatorEl.textContent='👑 BOSS';return;}const dx=b.x-me.x,dy=b.y-me.y,d=(Math.atan2(dy,dx)*180/Math.PI+360)%360;const arrow=d<22.5||d>=337.5?'→':d<67.5?'↘':d<112.5?'↓':d<157.5?'↙':d<202.5?'←':d<247.5?'↖':d<292.5?'↑':'↗';bossLocatorEl.textContent='👑 BOSS '+arrow+' · 거리 '+Math.round(Math.hypot(dx,dy));}
 app.ticker.maxFPS=60;app.ticker.add(()=>{const dt=Math.min(app.ticker.deltaMS/1000,.05);for(const p of players)updatePlayerNode(p,dt);cleanupPlayerNodes();for(const s of slimes)updateSlimeNode(s,dt);cleanupSlimeNodes();const me=getMe(),meNode=me&&playerNodes.get(me.id);if(meNode){cameraX=clampClient(meNode.x-innerWidth/2,0,Math.max(0,world.width-innerWidth));cameraY=clampClient(meNode.y-innerHeight/2,0,Math.max(0,world.height-innerHeight));}else{cameraX=0;cameraY=0;}worldRoot.position.set(-cameraX,-cameraY);for(const n of projectileNodes.values()){n.x+=n.vx*dt;n.y+=n.vy*dt;}for(const [id,c] of effectNodes){const t=(performance.now()-c.started)/c.life;c.alpha=Math.max(0,1-t);if(t>=1){c.destroy({children:true});effectNodes.delete(id);}}for(const c of portalLayer.children){if(c.ring){const pulse=1+Math.sin(performance.now()/260+c.position.x*.01)*.06;c.ring.scale.set(pulse);c.ring.rotation+=dt*.25;}}preview.clear();if(attackDragging&&meNode){if(selectedAvatar==='mage'){preview.lineStyle(6,0x5ffaff,.65).moveTo(meNode.x,meNode.y).lineTo(meNode.x+attackX*500,meNode.y+attackY*500);}else if(selectedAvatar==='pirate'){const angle=Math.atan2(attackY,attackX);preview.beginFill(0xffb137,.15).moveTo(meNode.x,meNode.y).arc(meNode.x,meNode.y,slashRange,angle-slashHalfAngle,angle+slashHalfAngle).lineTo(meNode.x,meNode.y).endFill();}else{const base=Math.atan2(attackY,attackX);preview.lineStyle(3,0xe8e0a0,.62);for(const off of[-.14,0,.14]){const a=base+off;preview.moveTo(meNode.x,meNode.y).lineTo(meNode.x+Math.cos(a)*500,meNode.y+Math.sin(a)*500);}}}updateBossLocator();updatePortalUi();});
 })();
