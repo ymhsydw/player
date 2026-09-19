@@ -1,0 +1,53 @@
+name: Apply flat forest boss defense v3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-boss-map-v3.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Apply patch
+        run: python boss_map_v3_patch.py
+      - name: Server syntax check
+        run: node --check server.js
+      - name: Runtime and client syntax check
+        run: |
+          npm install --ignore-scripts
+          node server.js >/tmp/player-server.log 2>&1 &
+          PID=$!
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:3000/ -o /tmp/page.html; then break; fi
+            sleep 1
+          done
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('/tmp/page.html').read_text()
+          scripts=re.findall(r'<script>([\s\S]*?)</script>',html)
+          if not scripts:
+              raise SystemExit('inline client script not found')
+          Path('/tmp/client.js').write_text(scripts[-1])
+          PY
+          node --check /tmp/client.js
+          kill $PID || true
+      - name: Commit direct changes
+        run: |
+          rm -f boss_map_v3_patch.py .github/workflows/apply-boss-map-v3.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server.js forest-map.svg boss_map_v3_patch.py .github/workflows/apply-boss-map-v3.yml
+          git commit -m 'Apply flat forest map and defended boss event'
+          git push origin HEAD:main
