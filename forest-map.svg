@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1200">
+<defs>
+  <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#85c956"/><stop offset="1" stop-color="#66ad43"/></linearGradient>
+  <radialGradient id="leafA"><stop stop-color="#70c64f"/><stop offset=".68" stop-color="#2e843f"/><stop offset="1" stop-color="#176035"/></radialGradient>
+  <radialGradient id="leafB"><stop stop-color="#a1d85a"/><stop offset=".72" stop-color="#3d9345"/><stop offset="1" stop-color="#1b6638"/></radialGradient>
+  <radialGradient id="portal"><stop stop-color="#d6ffff"/><stop offset=".3" stop-color="#56e8ff"/><stop offset=".72" stop-color="#278eff"/><stop offset="1" stop-color="#175bd8"/></radialGradient>
+  <pattern id="grass" width="52" height="46" patternUnits="userSpaceOnUse">
+    <path d="M8 33l3-7m0 7l5-6M34 15l2-7m0 7l5-5M46 38l2-5" stroke="#4d9638" stroke-width="2" opacity=".28" stroke-linecap="round"/>
+    <circle cx="23" cy="29" r="1.8" fill="#b5df72" opacity=".45"/>
+  </pattern>
+  <filter id="soft"><feGaussianBlur stdDeviation="10"/></filter>
+  <g id="tree">
+    <ellipse cx="0" cy="31" rx="55" ry="19" fill="#1a542f" opacity=".28"/>
+    <circle cx="-31" cy="2" r="39" fill="url(#leafA)"/><circle cx="28" cy="4" r="43" fill="url(#leafB)"/>
+    <circle cx="0" cy="-27" r="49" fill="url(#leafA)"/><circle cx="-4" cy="-17" r="27" fill="#72bd48" opacity=".65"/>
+  </g>
+  <g id="pinkTree">
+    <use href="#tree"/><circle cx="-19" cy="-33" r="7" fill="#ffb9c4"/><circle cx="11" cy="-44" r="8" fill="#ffc6cf"/><circle cx="30" cy="-12" r="6" fill="#ffafbd"/><circle cx="-38" cy="3" r="6" fill="#ffd1d8"/>
+  </g>
+  <g id="flowers">
+    <circle cx="0" cy="0" r="4" fill="#fff7dc"/><circle cx="12" cy="5" r="3.5" fill="#ffd26d"/><circle cx="-11" cy="7" r="3" fill="#ffb6c9"/>
+    <circle cx="5" cy="-10" r="3" fill="#f9f9ff"/><circle cx="-6" cy="-8" r="2.5" fill="#fff0a0"/>
+  </g>
+</defs>
+<rect width="1600" height="1200" fill="url(#ground)"/>
+<rect width="1600" height="1200" fill="url(#grass)" opacity=".75"/>
+
+<!-- soft painted ground variation -->
+<g fill="#c7b77d" opacity=".19">
+  <ellipse cx="800" cy="600" rx="290" ry="225"/>
+  <ellipse cx="800" cy="205" rx="85" ry="255"/><ellipse cx="800" cy="995" rx="90" ry="245"/>
+  <ellipse cx="330" cy="600" rx="270" ry="76"/><ellipse cx="1270" cy="600" rx="270" ry="76"/>
+</g>
+<g fill="#d9c890" opacity=".14">
+  <ellipse cx="530" cy="360" rx="160" ry="55" transform="rotate(28 530 360)"/>
+  <ellipse cx="1080" cy="365" rx="180" ry="52" transform="rotate(-24 1080 365)"/>
+  <ellipse cx="535" cy="845" rx="180" ry="55" transform="rotate(-28 535 845)"/>
+  <ellipse cx="1080" cy="845" rx="170" ry="55" transform="rotate(27 1080 845)"/>
+</g>
+
+<!-- subtle safe-zone meadow -->
+<circle cx="800" cy="600" r="245" fill="#9bd869" opacity=".20"/>
+<circle cx="800" cy="600" r="242" fill="none" stroke="#d9ffbe" stroke-width="4" opacity=".22"/>
+
+<!-- decorative flowers in playable field -->
+<g opacity=".95">
+  <use href="#flowers" x="380" y="280"/><use href="#flowers" x="510" y="470"/><use href="#flowers" x="345" y="760"/>
+  <use href="#flowers" x="560" y="930"/><use href="#flowers" x="1040" y="270"/><use href="#flowers" x="1230" y="430"/>
+  <use href="#flowers" x="1130" y="780"/><use href="#flowers" x="1260" y="925"/><use href="#flowers" x="920" y="965"/>
+  <use href="#flowers" x="660" y="255"/><use href="#flowers" x="960" y="470"/><use href="#flowers" x="390" y="980"/>
+  <use href="#flowers" x="1360" y="710"/><use href="#flowers" x="225" y="495"/>
+</g>
+<g fill="#3b8f3b" opacity=".55">
+  <circle cx="455" cy="210" r="9"/><circle cx="1185" cy="245" r="8"/><circle cx="280" cy="890" r="9"/>
+  <circle cx="1320" cy="850" r="10"/><circle cx="1025" cy="1030" r="8"/><circle cx="610" cy="760" r="7"/>
+</g>
+
+<!-- dense forest border: visual only -->
+<g>
+  <use href="#tree" x="25" y="45"/><use href="#tree" x="125" y="35"/><use href="#pinkTree" x="235" y="45"/><use href="#tree" x="345" y="32"/>
+  <use href="#tree" x="455" y="45"/><use href="#tree" x="570" y="31"/><use href="#tree" x="690" y="45"/><use href="#pinkTree" x="810" y="34"/>
+  <use href="#tree" x="930" y="45"/><use href="#tree" x="1050" y="32"/><use href="#tree" x="1170" y="45"/><use href="#pinkTree" x="1290" y="35"/>
+  <use href="#tree" x="1410" y="43"/><use href="#tree" x="1535" y="35"/>
+  <use href="#tree" x="25" y="1165"/><use href="#pinkTree" x="135" y="1170"/><use href="#tree" x="250" y="1155"/><use href="#tree" x="365" y="1170"/>
+  <use href="#tree" x="485" y="1158"/><use href="#tree" x="605" y="1170"/><use href="#pinkTree" x="725" y="1155"/><use href="#tree" x="845" y="1170"/>
+  <use href="#tree" x="965" y="1157"/><use href="#tree" x="1085" y="1170"/><use href="#pinkTree" x="1205" y="1155"/><use href="#tree" x="1325" y="1170"/>
+  <use href="#tree" x="1445" y="1156"/><use href="#tree" x="1565" y="1170"/>
+  <use href="#tree" x="18" y="145"/><use href="#tree" x="30" y="265"/><use href="#pinkTree" x="18" y="390"/><use href="#tree" x="30" y="515"/>
+  <use href="#tree" x="18" y="645"/><use href="#tree" x="30" y="775"/><use href="#pinkTree" x="18" y="905"/><use href="#tree" x="30" y="1035"/>
+  <use href="#tree" x="1580" y="145"/><use href="#pinkTree" x="1570" y="270"/><use href="#tree" x="1582" y="395"/><use href="#tree" x="1570" y="520"/>
+  <use href="#tree" x="1582" y="650"/><use href="#pinkTree" x="1570" y="780"/><use href="#tree" x="1582" y="910"/><use href="#tree" x="1570" y="1035"/>
+</g>
+
+<!-- border undergrowth -->
+<g opacity=".9">
+  <use href="#flowers" x="115" y="105"/><use href="#flowers" x="290" y="92"/><use href="#flowers" x="500" y="98"/><use href="#flowers" x="1090" y="95"/>
+  <use href="#flowers" x="1380" y="105"/><use href="#flowers" x="120" y="1085"/><use href="#flowers" x="430" y="1090"/><use href="#flowers" x="960" y="1090"/>
+  <use href="#flowers" x="1370" y="1080"/><use href="#flowers" x="95" y="350"/><use href="#flowers" x="90" y="720"/><use href="#flowers" x="1510" y="475"/><use href="#flowers" x="1510" y="870"/>
+</g>
+
+<!-- central stone portal -->
+<g transform="translate(800 600)">
+  <circle r="82" fill="#55704a" opacity=".28"/>
+  <circle r="65" fill="#a7aa8f"/><circle r="53" fill="#727b6e"/><circle r="42" fill="#b4b7a0"/>
+  <g fill="#8c927f" stroke="#656d60" stroke-width="3">
+    <path d="M-72 25h18v-81l18-18 16 15v72h-20v-55l-8 7v60z"/>
+    <path d="M72 25H54v-81L36-74 20-59v72h20v-55l8 7v60z"/>
+  </g>
+  <circle r="33" fill="url(#portal)"/>
+  <path d="M-19 1c9-24 44-16 39 8-4 19-34 24-43 5-9-19 13-36 31-27" fill="none" stroke="#d9ffff" stroke-width="6" stroke-linecap="round" opacity=".9"/>
+  <circle r="48" fill="none" stroke="#baf7ff" stroke-width="3" opacity=".55"/>
+  <g fill="#fff" opacity=".8"><circle cx="-43" cy="-37" r="3"/><circle cx="46" cy="-21" r="2.5"/><circle cx="37" cy="42" r="2"/><circle cx="-35" cy="46" r="2.5"/></g>
+</g>
+</svg>
